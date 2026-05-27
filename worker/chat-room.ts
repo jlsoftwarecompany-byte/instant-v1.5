@@ -118,10 +118,15 @@ export class ChatRoom {
   }
 
   async fetch(request: Request): Promise<Response> {
-    // Ensure alarm is running (schedules timer monitoring every 5 s)
-    const alarm = await this.state.storage.getAlarm();
-    if (alarm === null) {
-      await this.state.storage.setAlarm(Date.now() + 5_000);
+    // Alarm setup is non-fatal — if it fails, timer monitoring is disabled
+    // but WebSocket connections still work normally.
+    try {
+      const alarm = await this.state.storage.getAlarm();
+      if (alarm === null) {
+        await this.state.storage.setAlarm(Date.now() + 5_000);
+      }
+    } catch (e) {
+      console.error("[ChatRoom] alarm setup error (non-fatal):", e);
     }
 
     this.initVapid();
@@ -130,12 +135,16 @@ export class ChatRoom {
       return new Response("Expected WebSocket upgrade", { status: 426 });
     }
 
-    const pair = new WebSocketPair();
-    const [client, server] = Object.values(pair) as [WebSocket, WebSocket];
-    server.accept();
-    this.wire(server);
-
-    return new Response(null, { status: 101, webSocket: client });
+    try {
+      const pair = new WebSocketPair();
+      const [client, server] = Object.values(pair) as [WebSocket, WebSocket];
+      server.accept();
+      this.wire(server);
+      return new Response(null, { status: 101, webSocket: client });
+    } catch (e: any) {
+      console.error("[ChatRoom] WebSocket setup error:", e);
+      return new Response("WebSocket setup failed: " + e?.message, { status: 500 });
+    }
   }
 
   // Replaces setInterval(checkTimers, 5000)
