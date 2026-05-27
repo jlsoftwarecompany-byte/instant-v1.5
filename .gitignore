@@ -11,7 +11,6 @@ coverage/
 .wrangler/
 .dev.vars
 .dev.vars.*
-cloudflare-env.d.ts
 
 # local SQLite DB (Express dev only)
 instant.db

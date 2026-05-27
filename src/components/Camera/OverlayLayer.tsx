@@ -3,7 +3,7 @@
  * Sticker / text / draw overlays composed onto an off-screen canvas before
  * sending. AR filters are loaded lazily via lib/arFilters.ts.
  */
-import { useRef, useState } from "react";
+import React, { useRef, useState } from "react";
 
 export interface Overlay {
   id: string;
