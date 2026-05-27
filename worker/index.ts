@@ -23,9 +23,20 @@ export default {
     _ctx: ExecutionContext
   ): Promise<Response> {
     const url = new URL(request.url);
+    const upgrade = request.headers.get("Upgrade");
+
+    console.log(`[Worker] ${request.method} ${url.pathname} Upgrade=${upgrade ?? "none"}`);
+
+    // Diagnostic ping — confirms the Worker is running
+    if (url.pathname === "/api/ping") {
+      return new Response(JSON.stringify({ ok: true, ts: Date.now() }), {
+        headers: { "Content-Type": "application/json" },
+      });
+    }
 
     // WebSocket upgrade → global ChatRoom Durable Object
-    if (request.headers.get("Upgrade") === "websocket") {
+    if (upgrade === "websocket") {
+      console.log("[Worker] Routing WebSocket upgrade to ChatRoom DO");
       const id = env.CHAT_ROOM.idFromName("global");
       const room = env.CHAT_ROOM.get(id);
       return room.fetch(request);

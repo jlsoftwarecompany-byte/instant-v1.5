@@ -118,6 +118,8 @@ export class ChatRoom {
   }
 
   async fetch(request: Request): Promise<Response> {
+    console.log("[ChatRoom] fetch() called, Upgrade:", request.headers.get("Upgrade"));
+
     // Alarm setup is non-fatal — if it fails, timer monitoring is disabled
     // but WebSocket connections still work normally.
     try {
@@ -132,14 +134,17 @@ export class ChatRoom {
     this.initVapid();
 
     if (request.headers.get("Upgrade") !== "websocket") {
+      console.log("[ChatRoom] Non-WebSocket request — returning 426");
       return new Response("Expected WebSocket upgrade", { status: 426 });
     }
 
+    console.log("[ChatRoom] Creating WebSocketPair...");
     try {
       const pair = new WebSocketPair();
       const [client, server] = Object.values(pair) as [WebSocket, WebSocket];
       server.accept();
       this.wire(server);
+      console.log("[ChatRoom] WebSocket accepted, returning 101");
       return new Response(null, { status: 101, webSocket: client });
     } catch (e: any) {
       console.error("[ChatRoom] WebSocket setup error:", e);
