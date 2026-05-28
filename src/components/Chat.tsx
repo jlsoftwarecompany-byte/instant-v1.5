@@ -3,7 +3,7 @@ import { Message, TimerState, User } from "../types";
 import { wsService } from "../lib/ws";
 import {
   Send, ChevronLeft, Clock, ShieldAlert, Image as ImageIcon, Camera,
-  Download, Sparkles, Check, Loader2, Star
+  Download, Sparkles, Check, Loader2, Star, Zap, Gift
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { MessageBubble } from "./MessageBubble";
@@ -116,6 +116,14 @@ export const Chat: React.FC<ChatProps> = ({
                 msg.id === data.messageId ? { ...msg, seen: true } : msg
               )
             );
+          }
+          break;
+
+        case "CHAT_DELETED":
+          if (data.conversationId === conversationId) {
+            triggerToast("Chat deleted — no response in time! 💥");
+            setMessages([]);
+            setTimeout(() => onBack(), 1800);
           }
           break;
 
@@ -256,48 +264,70 @@ export const Chat: React.FC<ChatProps> = ({
     };
   }, [messages]);
 
-  // Detect and update conversation phase based on messages
+  // Detect and update conversation phase based on messages.
+  // Robust heuristic that doesn't depend on the backend persisting
+  // message_type / is_responded_to: a conversation becomes "active" as soon
+  // as BOTH participants have sent at least one message (i.e. the opener was
+  // answered). Until then it remains in the opener "awaiting_response" phase.
   useEffect(() => {
+    const me = currentUser.username.toLowerCase();
+    const them = contact.username.toLowerCase();
+
     if (messages.length === 0) {
-      // No messages yet — current user should be able to send opener
+      // No messages yet — current user may send the opener
       setConversationPhase("awaiting_response");
       setOpenerInitiator(currentUser.username);
-    } else if (messages.length === 1) {
-      // One message (an opener) exists
-      const firstMsg = messages[0];
-      if (firstMsg.message_type === "opener" || !firstMsg.message_type) {
-        setOpenerInitiator(firstMsg.sender);
-        setConversationPhase("awaiting_response");
-        setOpenerMessageId(firstMsg.id);
-        // If current user sent the opener, mark as waiting
-        if (firstMsg.sender === currentUser.username) {
-          setIsWaitingForOpenerResponse(true);
-          // Extract timer choice
-          if (firstMsg.timer_duration === 600000) setOpenerTimerChoice("10m");
-          else if (firstMsg.timer_duration === 3600000) setOpenerTimerChoice("1hr");
-          else if (firstMsg.timer_duration === 43200000) setOpenerTimerChoice("12hr");
-        }
-      }
-    } else if (messages.length >= 2) {
-      // Multiple messages — check if opener has been responded to
-      const hasResponseToOpener = messages.some(m =>
-        m.message_type === "opener" && m.is_responded_to === 1
-      );
-      if (hasResponseToOpener) {
-        setConversationPhase("active");
-      } else {
-        // Still in opener phase
-        const openerMsg = messages.find(m => m.message_type === "opener" || !m.message_type);
-        if (openerMsg) {
-          setOpenerInitiator(openerMsg.sender);
-          setOpenerMessageId(openerMsg.id);
-          if (openerMsg.timer_duration === 600000) setOpenerTimerChoice("10m");
-          else if (openerMsg.timer_duration === 3600000) setOpenerTimerChoice("1hr");
-          else if (openerMsg.timer_duration === 43200000) setOpenerTimerChoice("12hr");
-        }
-      }
+      setOpenerMessageId(null);
+      return;
     }
-  }, [messages.length, currentUser.username]);
+
+    const senders = new Set(messages.map(m => m.sender.toLowerCase()));
+    const explicitlyResponded = messages.some(
+      m => m.message_type === "opener" && m.is_responded_to === 1
+    );
+    const bothParticipated = senders.has(me) && senders.has(them);
+
+    if (explicitlyResponded || bothParticipated) {
+      // Opener has been answered — conversation is live
+      setConversationPhase("active");
+      setIsWaitingForOpenerResponse(false);
+      return;
+    }
+
+    // Still in opener phase — exactly one side has spoken
+    const opener = messages[0];
+    setConversationPhase("awaiting_response");
+    setOpenerInitiator(opener.sender);
+    setOpenerMessageId(opener.id);
+
+    if (opener.sender.toLowerCase() === me) {
+      setIsWaitingForOpenerResponse(true);
+    } else {
+      setIsWaitingForOpenerResponse(false);
+    }
+
+    // Derive the opener timer choice for link-reward display
+    if (opener.timer_duration === 600000) setOpenerTimerChoice("10m");
+    else if (opener.timer_duration === 3600000) setOpenerTimerChoice("1hr");
+    else if (opener.timer_duration === 43200000) setOpenerTimerChoice("12hr");
+    else setOpenerTimerChoice(null);
+  }, [messages, currentUser.username, contact.username]);
+
+  // Keep the selected timer duration valid for the current phase.
+  // Opener presets are 10m/1hr/12hr; active presets are 10s/60s/5m.
+  useEffect(() => {
+    if (conversationPhase === "awaiting_response" && openerInitiator === currentUser.username) {
+      // Opener initiator: default to a valid opener preset
+      setTimerDuration(prev =>
+        prev === 600000 || prev === 3600000 || prev === 43200000 ? prev : 600000
+      );
+    } else if (conversationPhase === "active") {
+      // Active phase: default to a valid normal-message preset
+      setTimerDuration(prev =>
+        prev === 10000 || prev === 60000 || prev === 300000 ? prev : 10000
+      );
+    }
+  }, [conversationPhase, openerInitiator, currentUser.username]);
 
   const triggerToast = (msg: string) => {
     setFeedbackToast(msg);
@@ -322,6 +352,84 @@ export const Chat: React.FC<ChatProps> = ({
     }
   };
 
+  // OPENER: Send the initial message that starts the conversation.
+  // The initiator picks a 10m / 1hr / 12hr timer; the responder earns
+  // 3 / 2 / 1 links when they reply.
+  const handleSendOpenerMessage = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inputText.trim()) return;
+
+    wsService.send({
+      type: "CHAT_MESSAGE",
+      to: contact.username,
+      content: inputText.trim(),
+      sentAt: Date.now(),
+      timerDuration: timerDuration,
+      isPhoto: 0,
+      messageType: "opener"
+    });
+
+    // Mark local opener phase state
+    setIsWaitingForOpenerResponse(true);
+    setOpenerInitiator(currentUser.username);
+    setOpenerTimerChoice(
+      timerDuration === 600000 ? "10m" :
+      timerDuration === 3600000 ? "1hr" :
+      "12hr"
+    );
+
+    setInputText("");
+  };
+
+  // OPENER: Respond to an incoming opener — this activates the conversation
+  // and awards links to both participants.
+  const handleSendOpenerResponse = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inputText.trim()) return;
+
+    const linkReward =
+      openerTimerChoice === "10m" ? 3 :
+      openerTimerChoice === "1hr" ? 2 :
+      1;
+
+    // Mark the opener message as responded to locally
+    setMessages(prev =>
+      prev.map(m =>
+        (m.message_type === "opener" || !m.message_type) && m.sender.toLowerCase() !== currentUser.username.toLowerCase()
+          ? { ...m, is_responded_to: 1 }
+          : m
+      )
+    );
+
+    // Send the response message (no timer — the response itself activates the chat)
+    wsService.send({
+      type: "CHAT_MESSAGE",
+      to: contact.username,
+      content: inputText.trim(),
+      sentAt: Date.now(),
+      timerDuration: 0,
+      isPhoto: 0,
+      messageType: "opener",
+      isOpenerResponse: 1
+    });
+
+    // Notify the backend to award links to both parties.
+    // The server replies with LINKS_EARNED (absolute total + reward burst),
+    // so we don't award locally here to avoid double-counting.
+    wsService.send({
+      type: "OPENER_RESPONSE",
+      to: contact.username,
+      conversationId,
+      linksAwarded: linkReward
+    });
+
+    // Transition to ACTIVE phase
+    setConversationPhase("active");
+    setIsWaitingForOpenerResponse(false);
+    setInputText("");
+  };
+
+  // NORMAL: Send a normal message once the conversation is active.
   const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault();
     if (!inputText.trim() && !isPhotoSelected) return;
@@ -333,7 +441,8 @@ export const Chat: React.FC<ChatProps> = ({
       sentAt: Date.now(),
       timerDuration: timerDuration,
       isPhoto: isPhotoSelected ? 1 : 0,
-      photoData: isPhotoSelected ? selectedPhotoBase64 : undefined
+      photoData: isPhotoSelected ? selectedPhotoBase64 : undefined,
+      messageType: "normal"
     };
 
     wsService.send(payload);
@@ -342,6 +451,23 @@ export const Chat: React.FC<ChatProps> = ({
     setInputText("");
     setIsPhotoSelected(false);
     setSelectedPhotoBase64("");
+  };
+
+  // Delete the entire conversation when a normal message expires unanswered.
+  const handleChatDeletion = () => {
+    wsService.send({
+      type: "CHAT_EXPIRED_DELETE",
+      conversationId,
+      conversationUsername: contact.username,
+      reason: "NO_RESPONSE_TO_MESSAGE"
+    });
+
+    triggerToast("Chat deleted — no response in time! 💥");
+
+    // Return to the inbox after a brief delay
+    setTimeout(() => {
+      onBack();
+    }, 1800);
   };
 
   // Dedicated websocket sender for in-app captured + compressed cameras
@@ -470,7 +596,22 @@ export const Chat: React.FC<ChatProps> = ({
               contactAvatar={contactAvatar}
               onClickPhoto={setViewerPhoto}
               onExplodeComplete={(msgId) => {
-                setMessages(prev => prev.map(msg => msg.id === msgId ? { ...msg, expired: 1 } : msg));
+                setMessages(prev => {
+                  const exploded = prev.find(msg => msg.id === msgId);
+                  // If a normal message expires and nothing was sent after it,
+                  // the conversation is abandoned → delete the entire chat.
+                  if (
+                    exploded &&
+                    conversationPhase === "active" &&
+                    (exploded.message_type === "normal" || !exploded.message_type)
+                  ) {
+                    const hasLaterMessage = prev.some(msg => msg.sent_at > exploded.sent_at);
+                    if (!hasLaterMessage) {
+                      handleChatDeletion();
+                    }
+                  }
+                  return prev.map(msg => msg.id === msgId ? { ...msg, expired: 1 } : msg);
+                });
               }}
             />
           ))
@@ -478,144 +619,248 @@ export const Chat: React.FC<ChatProps> = ({
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Bottom Message Composer */}
+      {/* Bottom Message Composer — Conditional by Conversation Phase */}
       {saveStatus !== "saved" && (
-        <form onSubmit={handleSendMessage} className="p-4 border-t theme-border bg-[var(--background)] sticky bottom-0 z-40">
-          
-          {/* Temporary Photo attachment preview widget */}
-          {isPhotoSelected && (
-            <div className="mb-3.5 p-2 border border-pink-500/20 bg-pink-500/5 rounded-xl flex items-center justify-between select-none animate-in fade-in zoom-in duration-200">
-              <div className="flex items-center gap-2">
-                <img 
-                  src={selectedPhotoBase64} 
-                  alt="Attachment preview" 
-                  referrerPolicy="no-referrer"
-                  className="w-10 h-10 object-cover rounded-lg border border-pink-500/20" 
+        <>
+          {conversationPhase === "awaiting_response" && openerInitiator === currentUser.username ? (
+            /* ───────── OPENER PHASE — INITIATOR VIEW ───────── */
+            <div className="p-4 border-t theme-border bg-[var(--background)] sticky bottom-0 z-40">
+              <div className="mb-4 bg-gradient-to-r from-pink-500/10 to-purple-500/10 dark:from-pink-500/20 dark:to-purple-500/20 p-4 rounded-2xl border border-pink-500/30 dark:border-purple-500/30">
+                <h3 className="text-xs font-black tracking-widest uppercase text-pink-500 mb-3 flex items-center gap-1.5">
+                  <Zap className="w-4 h-4 animate-pulse" /> Start Conversation
+                </h3>
+
+                {/* Opener Timer Selection — 3 Options */}
+                <div className="grid grid-cols-3 gap-2 mb-3">
+                  {[
+                    { label: "10 min", val: 600000, links: 3 },
+                    { label: "1 hour", val: 3600000, links: 2 },
+                    { label: "12 hours", val: 43200000, links: 1 }
+                  ].map(opt => (
+                    <button
+                      key={opt.val}
+                      type="button"
+                      onClick={() => setTimerDuration(opt.val)}
+                      disabled={isWaitingForOpenerResponse}
+                      className={`
+                        px-3 py-2.5 text-[9px] font-black rounded-lg transition duration-150 border cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed
+                        ${timerDuration === opt.val
+                          ? "bg-gradient-to-r from-[#FE2C55] to-[#a855f7] border-transparent text-white shadow-md scale-105"
+                          : "bg-zinc-100 dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700 text-zinc-500 dark:text-zinc-300 hover:text-pink-500 hover:bg-zinc-200 dark:hover:bg-zinc-700"
+                        }
+                      `}
+                    >
+                      {opt.label}
+                      <br />
+                      <span className="text-[8px] text-amber-500 font-black">+{opt.links} ⭐</span>
+                    </button>
+                  ))}
+                </div>
+
+                <span className="text-[9px] text-zinc-400 font-medium">
+                  Choose how long they have to respond. You'll earn the same number of links they do.
+                </span>
+              </div>
+
+              {isWaitingForOpenerResponse ? (
+                /* Waiting Status — input locked until a response arrives */
+                <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl flex items-center gap-2 text-amber-600 dark:text-amber-400 text-xs font-bold">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Waiting for their response...
+                </div>
+              ) : (
+                /* Opener Input */
+                <form onSubmit={handleSendOpenerMessage} className="space-y-3">
+                  <textarea
+                    value={inputText}
+                    onChange={(e) => setInputText(e.target.value)}
+                    placeholder="Write your opening message..."
+                    rows={3}
+                    className="w-full px-4 py-3 rounded-xl border theme-border bg-[var(--background)] text-[var(--foreground)] font-medium text-sm focus:outline-none focus:ring-1 focus:ring-pink-500 resize-none"
+                  />
+                  <button
+                    type="submit"
+                    disabled={!inputText.trim()}
+                    className="w-full py-3 bg-gradient-to-r from-[#FE2C55] to-[#a855f7] hover:opacity-95 disabled:from-zinc-400/20 disabled:to-zinc-400/30 disabled:text-zinc-500/40 text-white font-extrabold uppercase text-xs tracking-wider rounded-xl transition flex items-center justify-center gap-2 cursor-pointer shadow-md"
+                  >
+                    <Send className="w-4 h-4" />
+                    Send Opener
+                  </button>
+                </form>
+              )}
+            </div>
+
+          ) : conversationPhase === "awaiting_response" && openerInitiator !== currentUser.username ? (
+            /* ───────── OPENER PHASE — RESPONDER VIEW ───────── */
+            <div className="p-4 border-t theme-border bg-[var(--background)] sticky bottom-0 z-40">
+              <div className="mb-4 p-4 bg-gradient-to-r from-emerald-500/10 to-cyan-500/10 dark:from-emerald-500/20 dark:to-cyan-500/20 rounded-2xl border border-emerald-500/30 dark:border-cyan-500/30">
+                <h3 className="text-xs font-black tracking-widest uppercase text-emerald-600 dark:text-emerald-400 mb-2 flex items-center gap-1.5">
+                  <Gift className="w-4 h-4 animate-bounce" /> Earn {openerTimerChoice === "10m" ? 3 : openerTimerChoice === "1hr" ? 2 : 1} Links
+                </h3>
+                <p className="text-[9px] text-zinc-500 dark:text-zinc-400">
+                  Respond to this opener to activate the conversation and earn links.
+                </p>
+              </div>
+
+              {/* Response Input */}
+              <form onSubmit={handleSendOpenerResponse} className="space-y-3">
+                <textarea
+                  value={inputText}
+                  onChange={(e) => setInputText(e.target.value)}
+                  placeholder="Write your response to start chatting..."
+                  rows={3}
+                  className="w-full px-4 py-3 rounded-xl border theme-border bg-[var(--background)] text-[var(--foreground)] font-medium text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500 resize-none"
                 />
-                <div className="text-left">
-                  <p className="text-[10px] font-black text-pink-500 uppercase tracking-widest">Photo Captured</p>
-                  <p className="text-xs text-zinc-400">Ready to transmit in real time</p>
+                <button
+                  type="submit"
+                  disabled={!inputText.trim()}
+                  className="w-full py-3 bg-gradient-to-r from-emerald-500 to-cyan-500 hover:opacity-95 disabled:from-zinc-400/20 disabled:to-zinc-400/30 disabled:text-zinc-500/40 text-white font-extrabold uppercase text-xs tracking-wider rounded-xl transition flex items-center justify-center gap-2 cursor-pointer shadow-md"
+                >
+                  <Send className="w-4 h-4" />
+                  Respond &amp; Activate
+                </button>
+              </form>
+            </div>
+
+          ) : (
+            /* ───────── ACTIVE PHASE — NORMAL MESSAGES ───────── */
+            <form onSubmit={handleSendMessage} className="p-4 border-t theme-border bg-[var(--background)] sticky bottom-0 z-40">
+
+              {/* Temporary Photo attachment preview widget */}
+              {isPhotoSelected && (
+                <div className="mb-3.5 p-2 border border-pink-500/20 bg-pink-500/5 rounded-xl flex items-center justify-between select-none animate-in fade-in zoom-in duration-200">
+                  <div className="flex items-center gap-2">
+                    <img
+                      src={selectedPhotoBase64}
+                      alt="Attachment preview"
+                      referrerPolicy="no-referrer"
+                      className="w-10 h-10 object-cover rounded-lg border border-pink-500/20"
+                    />
+                    <div className="text-left">
+                      <p className="text-[10px] font-black text-pink-500 uppercase tracking-widest">Photo Captured</p>
+                      <p className="text-xs text-zinc-400">Ready to transmit in real time</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => { setIsPhotoSelected(false); setSelectedPhotoBase64(""); }}
+                    className="text-xs text-zinc-400 hover:text-rose-500 font-bold px-2 py-1 cursor-pointer"
+                  >
+                    Clear
+                  </button>
+                </div>
+              )}
+
+              {/* Message Timer — Normal Presets (10s / 60s / 5m) */}
+              <div className="mb-4 bg-zinc-50/50 dark:bg-zinc-900/40 p-3 rounded-2xl border theme-border">
+                <div className="flex items-center justify-between mb-2.5">
+                  <span className="text-[10px] font-black tracking-widest text-[var(--foreground)] opacity-75 uppercase flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5 text-pink-500 animate-pulse" /> Message Timer:
+                  </span>
+                  <span className="px-2 py-0.5 text-xs font-black rounded-lg bg-pink-500/15 text-pink-500 border border-pink-500/20 shadow-xs animate-pulse">
+                    {(() => {
+                      const s = Math.round(timerDuration / 1000);
+                      if (s < 60) return `${s}s`;
+                      const m = Math.floor(s / 60);
+                      const rem = s % 60;
+                      return rem === 0 ? `${m}m` : `${m}m ${rem}s`;
+                    })()}
+                  </span>
+                </div>
+
+                {/* Three Timer Preset Buttons */}
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    { label: "10s 🔥", val: 10000 },
+                    { label: "60s", val: 60000 },
+                    { label: "5m", val: 300000 }
+                  ].map(opt => (
+                    <button
+                      key={opt.val}
+                      type="button"
+                      onClick={() => setTimerDuration(opt.val)}
+                      className={`
+                        px-2.5 py-2 text-[9px] font-black rounded-lg transition duration-150 border cursor-pointer
+                        ${timerDuration === opt.val
+                          ? "bg-gradient-to-r from-[#FE2C55] to-[#a855f7] border-transparent text-white shadow-md scale-105"
+                          : "bg-zinc-100 dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700 text-zinc-500 dark:text-zinc-300 hover:text-pink-500 hover:bg-zinc-200 dark:hover:bg-zinc-700"
+                        }
+                      `}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
                 </div>
               </div>
-              <button 
-                type="button" 
-                onClick={() => { setIsPhotoSelected(false); setSelectedPhotoBase64(""); }}
-                className="text-xs text-zinc-400 hover:text-rose-500 font-bold px-2 py-1 cursor-pointer"
-              >
-                Clear
-              </button>
-            </div>
-          )}
 
-          {/* Message Expiry Timer — Quick Presets Only */}
-          <div className="mb-4 bg-zinc-50/50 dark:bg-zinc-900/40 p-3 rounded-2xl border theme-border">
-            <div className="flex items-center justify-between mb-2.5">
-              <span className="text-[10px] font-black tracking-widest text-[var(--foreground)] opacity-75 uppercase flex items-center gap-1.5">
-                <Clock className="w-3.5 h-3.5 text-pink-500 animate-pulse" /> Message Expiry:
-              </span>
-              <span className="px-2 py-0.5 text-xs font-black rounded-lg bg-pink-500/15 text-pink-500 border border-pink-500/20 shadow-xs animate-pulse">
-                {(() => {
-                  const s = Math.round(timerDuration / 1000);
-                  if (s < 60) return `${s}s`;
-                  const m = Math.floor(s / 60);
-                  const rem = s % 60;
-                  return rem === 0 ? `${m}m` : `${m}m ${rem}s`;
-                })()}
-              </span>
-            </div>
+              {/* Subtle Compression indicator */}
+              {isCompressing && (
+                <div className="mb-2 p-2 bg-pink-500/5 border border-pink-500/20 text-xs font-black text-pink-500 animate-pulse flex items-center gap-2 rounded-xl">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  Compressing...
+                </div>
+              )}
 
-            {/* Four Timer Preset Buttons */}
-            <div className="grid grid-cols-4 gap-2">
-              {[
-                { label: "10s 🔥", val: 10000 },
-                { label: "30s", val: 30000 },
-                { label: "5m", val: 300000 },
-                { label: "30m", val: 1800000 }
-              ].map(opt => (
+              <div className="flex items-center gap-2">
+
+                {/* Gallery Upload file button */}
                 <button
-                  key={opt.val}
                   type="button"
-                  onClick={() => setTimerDuration(opt.val)}
-                  className={`
-                    px-2.5 py-2 text-[9px] font-black rounded-lg transition duration-150 border cursor-pointer
-                    ${timerDuration === opt.val
-                      ? "bg-gradient-to-r from-[#FE2C55] to-[#a855f7] border-transparent text-white shadow-md scale-105"
-                      : "bg-zinc-100 dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700 text-zinc-500 dark:text-zinc-300 hover:text-pink-500 hover:bg-zinc-200 dark:hover:bg-zinc-700"
-                    }
-                  `}
+                  onClick={() => fileInputRef.current?.click()}
+                  className="p-3.5 rounded-xl border theme-border bg-black/5 dark:bg-zinc-900 hover:bg-black/10 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300 hover:text-pink-500 transition flex items-center justify-center shadow-xs shrink-0 cursor-pointer"
+                  title="Upload Photo File"
                 >
-                  {opt.label}
+                  <ImageIcon className="w-5 h-5" />
                 </button>
-              ))}
-            </div>
-          </div>
 
-          {/* Subtle Compression indicator */}
-          {isCompressing && (
-            <div className="mb-2 p-2 bg-pink-500/5 border border-pink-500/20 text-xs font-black text-pink-500 animate-pulse flex items-center gap-2 rounded-xl">
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              Compressing...
-            </div>
+                {/* Custom In-App Camera capture snap button */}
+                <button
+                  type="button"
+                  onClick={() => setShowCamera(true)}
+                  className="p-3.5 rounded-xl border theme-border bg-[#FE2C55]/5 text-[#FE2C55] hover:bg-[#FE2C55]/10 border-pink-500/20 transition flex items-center justify-center shadow-xs shrink-0 cursor-pointer"
+                  title="In-App Camera Capture"
+                >
+                  <Camera className="w-5 h-5" />
+                </button>
+
+                <input
+                  type="file"
+                  accept="image/*"
+                  ref={fileInputRef}
+                  onChange={handlePhotoUploadChange}
+                  className="hidden"
+                />
+
+                {!isPhotoSelected && (
+                  <input
+                    type="text"
+                    value={inputText}
+                    onChange={(e) => setInputText(e.target.value)}
+                    placeholder="Type a message..."
+                    className="flex-1 px-4 py-3.5 rounded-xl border theme-border bg-[var(--background)] font-sans text-sm text-[var(--foreground)] focus:outline-none focus:ring-1 focus:ring-pink-500 transition"
+                  />
+                )}
+
+                {isPhotoSelected && (
+                  <input
+                    type="text"
+                    disabled
+                    placeholder="Press send to transmit the selected photo attachment"
+                    className="flex-1 px-4 py-3.5 rounded-xl border theme-border bg-[#FE2C55]/5 text-[#FE2C55] font-medium italic text-sm"
+                  />
+                )}
+
+                <button
+                  type="submit"
+                  disabled={(!inputText.trim() && !isPhotoSelected)}
+                  className="p-3.5 bg-gradient-to-r from-[#FE2C55] to-[#a855f7] hover:opacity-95 disabled:from-zinc-400/20 disabled:to-zinc-400/30 disabled:text-zinc-500/40 text-white rounded-xl transition flex items-center justify-center shadow-lg shadow-pink-500/5 shrink-0 cursor-pointer active:scale-95"
+                >
+                  <Send className="w-5 h-5" />
+                </button>
+              </div>
+            </form>
           )}
-
-          <div className="flex items-center gap-2">
-            
-            {/* Gallery Upload file button */}
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className="p-3.5 rounded-xl border theme-border bg-black/5 dark:bg-zinc-900 hover:bg-black/10 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300 hover:text-pink-500 transition flex items-center justify-center shadow-xs shrink-0 cursor-pointer"
-              title="Upload Photo File"
-            >
-              <ImageIcon className="w-5 h-5" />
-            </button>
-
-            {/* Custom In-App Camera capture snap button */}
-            <button
-              type="button"
-              onClick={() => setShowCamera(true)}
-              className="p-3.5 rounded-xl border theme-border bg-[#FE2C55]/5 text-[#FE2C55] hover:bg-[#FE2C55]/10 border-pink-500/20 transition flex items-center justify-center shadow-xs shrink-0 cursor-pointer"
-              title="In-App Camera Capture"
-            >
-              <Camera className="w-5 h-5" />
-            </button>
-            
-            <input 
-              type="file" 
-              accept="image/*" 
-              ref={fileInputRef} 
-              onChange={handlePhotoUploadChange}
-              className="hidden" 
-            />
-
-            {!isPhotoSelected && (
-              <input
-                type="text"
-                value={inputText}
-                onChange={(e) => setInputText(e.target.value)}
-                placeholder="Type and choose expiration time..."
-                className="flex-1 px-4 py-3.5 rounded-xl border theme-border bg-[var(--background)] font-sans text-sm theme-text-primary focus:outline-none focus:ring-1 focus:ring-pink-500 transition"
-              />
-            )}
-
-            {isPhotoSelected && (
-              <input
-                type="text"
-                disabled
-                placeholder="Press send to transmit the selected photo attachment"
-                className="flex-1 px-4 py-3.5 rounded-xl border theme-border bg-[#FE2C55]/5 text-[#FE2C55] font-medium italic text-sm"
-              />
-            )}
-
-            <button
-              type="submit"
-              disabled={(!inputText.trim() && !isPhotoSelected)}
-              className="p-3.5 bg-gradient-to-r from-[#FE2C55] to-[#a855f7] hover:opacity-95 disabled:from-zinc-400/20 disabled:to-zinc-400/30 disabled:text-zinc-500/40 text-white rounded-xl transition flex items-center justify-center shadow-lg shadow-pink-500/5 shrink-0 cursor-pointer active:scale-95"
-            >
-              <Send className="w-5 h-5" />
-            </button>
-          </div>
-        </form>
+        </>
       )}
 
       {/* In-App Camera capturing stream overlay */}

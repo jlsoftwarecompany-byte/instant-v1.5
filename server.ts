@@ -95,6 +95,16 @@ try {
 try {
   db.exec("ALTER TABLE users ADD COLUMN session_expires_at DATETIME");
 } catch (e) {}
+// v1.6 — Opener vs Normal messages + seen receipts
+try {
+  db.exec("ALTER TABLE messages ADD COLUMN message_type TEXT DEFAULT 'normal'");
+} catch (e) {}
+try {
+  db.exec("ALTER TABLE messages ADD COLUMN is_responded_to BOOLEAN DEFAULT 0");
+} catch (e) {}
+try {
+  db.exec("ALTER TABLE messages ADD COLUMN seen BOOLEAN DEFAULT 0");
+} catch (e) {}
 
 // Web Push setup
 let vapidPublic = process.env.VAPID_PUBLIC_KEY || "";
@@ -801,11 +811,12 @@ wss.on("connection", (ws) => {
 
         case "CHAT_MESSAGE": {
           if (!authenticatedUser) return;
-          const { to, content, sentAt, timerDuration, isPhoto } = data;
+          const { to, content, sentAt, timerDuration, isPhoto, messageType, isOpenerResponse } = data;
           const target = (to || "").toLowerCase().trim();
+          const msgType = messageType === "opener" ? "opener" : "normal";
 
           const conv = db.prepare(`
-            SELECT id FROM conversations 
+            SELECT id FROM conversations
             WHERE (LOWER(participant_1) = ? AND LOWER(participant_2) = ?)
                OR (LOWER(participant_1) = ? AND LOWER(participant_2) = ?)
           `).get(authenticatedUser, target, target, authenticatedUser) as any;
@@ -817,12 +828,20 @@ wss.on("connection", (ws) => {
 
           const convId = conv.id;
 
+          // If this is a response to an opener, mark prior unanswered openers responded
+          if (isOpenerResponse) {
+            db.prepare(`
+              UPDATE messages SET is_responded_to = 1
+              WHERE conversation_id = ? AND message_type = 'opener' AND LOWER(sender) = ?
+            `).run(convId, target);
+          }
+
           // Save message to SQLite
           const msgStmt = db.prepare(`
-            INSERT INTO messages (conversation_id, sender, receiver, content, sent_at, timer_duration, expired, is_photo)
-            VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+            INSERT INTO messages (conversation_id, sender, receiver, content, sent_at, timer_duration, expired, is_photo, message_type, is_responded_to, seen)
+            VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, 0)
           `);
-          const msgInfo = msgStmt.run(convId, authenticatedUser, target, content || "", sentAt, timerDuration, isPhoto ? 1 : 0);
+          const msgInfo = msgStmt.run(convId, authenticatedUser, target, content || "", sentAt, timerDuration, isPhoto ? 1 : 0, msgType, isOpenerResponse ? 1 : 0);
           const savedMsg = {
             id: msgInfo.lastInsertRowid as number,
             conversation_id: convId,
@@ -832,7 +851,10 @@ wss.on("connection", (ws) => {
             sent_at: sentAt,
             timer_duration: timerDuration,
             expired: 0,
-            is_photo: isPhoto ? 1 : 0
+            is_photo: isPhoto ? 1 : 0,
+            message_type: msgType,
+            is_responded_to: isOpenerResponse ? 1 : 0,
+            seen: false
           };
 
           // Handle Timer entries
@@ -942,9 +964,124 @@ wss.on("connection", (ws) => {
               sent_at: m.sent_at,
               timer_duration: m.timer_duration,
               expired: m.expired,
-              is_photo: m.is_photo
+              is_photo: m.is_photo,
+              message_type: m.message_type || "normal",
+              is_responded_to: m.is_responded_to || 0,
+              seen: !!m.seen
             }))
           }));
+          break;
+        }
+
+        case "MESSAGE_SEEN": {
+          if (!authenticatedUser) return;
+          const convId = parseInt(data.conversationId, 10);
+          const messageId = parseInt(data.messageId, 10);
+          if (isNaN(convId) || isNaN(messageId)) return;
+
+          // Only the receiver of a message may mark it seen
+          const msgRow = db.prepare("SELECT * FROM messages WHERE id = ?").get(messageId) as any;
+          if (!msgRow || msgRow.conversation_id !== convId) return;
+          if (msgRow.receiver.toLowerCase() !== authenticatedUser) return;
+
+          db.prepare("UPDATE messages SET seen = 1 WHERE id = ?").run(messageId);
+
+          // Broadcast to both participants so the sender's checkmark updates
+          const seenPayload = JSON.stringify({
+            type: "MESSAGE_SEEN_BROADCAST",
+            conversationId: convId,
+            messageId,
+            seenBy: authenticatedUser,
+            seenAt: data.seenAt || Date.now()
+          });
+          const senderSock = clients.get(msgRow.sender.toLowerCase());
+          const receiverSock = clients.get(msgRow.receiver.toLowerCase());
+          if (senderSock && senderSock.readyState === WebSocket.OPEN) senderSock.send(seenPayload);
+          if (receiverSock && receiverSock.readyState === WebSocket.OPEN) receiverSock.send(seenPayload);
+          break;
+        }
+
+        case "OPENER_RESPONSE": {
+          if (!authenticatedUser) return;
+          const convId = parseInt(data.conversationId, 10);
+          if (isNaN(convId)) return;
+
+          const convRow = db.prepare("SELECT * FROM conversations WHERE id = ?").get(convId) as any;
+          if (!convRow) return;
+
+          // Only the responder (not the opener initiator) triggers the award.
+          // participant_1 is the initiator; participant_2 is the responder.
+          const p1 = convRow.participant_1.toLowerCase();
+          const p2 = convRow.participant_2.toLowerCase();
+
+          // Tiered reward (3/2/1) clamped to a sane range
+          const reward = Math.max(1, Math.min(3, parseInt(data.linksAwarded, 10) || 1));
+
+          // Mark conversation as started/active
+          db.prepare("UPDATE conversations SET conversation_started = 1 WHERE id = ?").run(convId);
+
+          // Award links to both participants
+          const grantStmt = db.prepare("UPDATE users SET links = links + ? WHERE LOWER(username) = ?");
+          grantStmt.run(reward, p1);
+          grantStmt.run(reward, p2);
+
+          const u1Row = db.prepare("SELECT links FROM users WHERE LOWER(username) = ?").get(p1) as any;
+          const u2Row = db.prepare("SELECT links FROM users WHERE LOWER(username) = ?").get(p2) as any;
+
+          const sock1 = clients.get(p1);
+          const sock2 = clients.get(p2);
+          if (sock1 && sock1.readyState === WebSocket.OPEN) {
+            sock1.send(JSON.stringify({
+              type: "LINKS_EARNED",
+              amount: reward,
+              reason: "Opener answered",
+              links: u1Row?.links || 0
+            }));
+          }
+          if (sock2 && sock2.readyState === WebSocket.OPEN) {
+            sock2.send(JSON.stringify({
+              type: "LINKS_EARNED",
+              amount: reward,
+              reason: "Opener answered",
+              links: u2Row?.links || 0
+            }));
+          }
+
+          syncUserFullData(p1);
+          syncUserFullData(p2);
+          break;
+        }
+
+        case "CHAT_EXPIRED_DELETE": {
+          if (!authenticatedUser) return;
+          const convId = parseInt(data.conversationId, 10);
+          if (isNaN(convId)) return;
+
+          const convRow = db.prepare("SELECT * FROM conversations WHERE id = ?").get(convId) as any;
+          if (!convRow) return;
+
+          // Only a participant may trigger deletion
+          const p1 = convRow.participant_1.toLowerCase();
+          const p2 = convRow.participant_2.toLowerCase();
+          if (authenticatedUser !== p1 && authenticatedUser !== p2) return;
+
+          // Wipe all messages and timers for this conversation, reset to opener phase
+          db.prepare("DELETE FROM messages WHERE conversation_id = ?").run(convId);
+          db.prepare("DELETE FROM timers WHERE conversation_id = ?").run(convId);
+          db.prepare("UPDATE conversations SET conversation_started = 0 WHERE id = ?").run(convId);
+
+          const deletedPayload = JSON.stringify({
+            type: "CHAT_DELETED",
+            conversationId: convId,
+            reason: data.reason || "NO_RESPONSE_TO_MESSAGE"
+          });
+          const sock1 = clients.get(p1);
+          const sock2 = clients.get(p2);
+          if (sock1 && sock1.readyState === WebSocket.OPEN) sock1.send(deletedPayload);
+          if (sock2 && sock2.readyState === WebSocket.OPEN) sock2.send(deletedPayload);
+
+          syncUserFullData(p1);
+          syncUserFullData(p2);
           break;
         }
 
