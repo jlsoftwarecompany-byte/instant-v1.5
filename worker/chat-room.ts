@@ -445,78 +445,15 @@ export class ChatRoom {
         break;
       }
 
-      // ── Legacy passwordless registration ─────────────────────────────────
+      // ── Legacy passwordless registration (disabled for security) ──────────
       case "REGISTER_USER": {
-        const username = (data.username || "").toLowerCase().trim();
-        const nickname = (data.nickname || "").trim();
-        if (!username || !nickname) {
-          ws.send(JSON.stringify({ type: "ERROR", message: "Username and Nickname are required" }));
-          return;
-        }
-        if (!/^[a-zA-Z0-9_]+$/.test(username) || username.length > 20) {
-          ws.send(JSON.stringify({ type: "ERROR", message: "Invalid username format" }));
-          return;
-        }
-        if (nickname.length < 1 || nickname.length > 30) {
-          ws.send(JSON.stringify({ type: "ERROR", message: "Nickname must be between 1 and 30 characters" }));
-          return;
-        }
-        try {
-          const result = await db
-            .prepare(
-              "INSERT INTO users (username, nickname, links, linker_avatar, linker_color) VALUES (?, ?, 0, '👾', 'pink')"
-            )
-            .bind(username, nickname)
-            .run();
-          const user = {
-            id: result.meta.last_row_id,
-            username,
-            nickname,
-            links: 0,
-            created_at: new Date().toISOString(),
-            linker_avatar: "👾",
-            linker_color: "pink",
-          };
-          setUser(username);
-          this.clients.set(username, ws);
-          ws.send(JSON.stringify({ type: "REGISTER_SUCCESS", user }));
-          await this.syncUser(username);
-        } catch {
-          ws.send(JSON.stringify({ type: "ERROR", message: "Username is already taken" }));
-        }
+        ws.send(JSON.stringify({ type: "ERROR", message: "Passwordless registration is disabled. Please use AUTH_REGISTER with a password." }));
         break;
       }
 
-      // ── Legacy passwordless verify ────────────────────────────────────────
+      // ── Legacy passwordless verify (disabled for security) ────────────────
       case "VERIFY_USER": {
-        const username = (data.username || "").toLowerCase().trim();
-        const row = await db
-          .prepare("SELECT * FROM users WHERE LOWER(username) = ?")
-          .bind(username)
-          .first<any>();
-        if (row) {
-          const authed = row.username.toLowerCase();
-          setUser(authed);
-          this.clients.set(authed, ws);
-          ws.send(
-            JSON.stringify({
-              type: "VERIFY_USER_RESPONSE",
-              success: true,
-              user: {
-                id: row.id,
-                username: row.username,
-                nickname: row.nickname,
-                links: row.links,
-                created_at: row.created_at,
-                linker_avatar: row.linker_avatar || "👾",
-                linker_color: row.linker_color || "pink",
-              },
-            })
-          );
-          await this.syncUser(authed);
-        } else {
-          ws.send(JSON.stringify({ type: "VERIFY_USER_RESPONSE", success: false }));
-        }
+        ws.send(JSON.stringify({ type: "VERIFY_USER_RESPONSE", success: false }));
         break;
       }
 
@@ -826,6 +763,13 @@ export class ChatRoom {
         if (!authedUser) return;
         const convId = parseInt(data.conversationId, 10);
         if (isNaN(convId)) return;
+
+        const histConv = await db
+          .prepare("SELECT id FROM conversations WHERE id = ? AND (LOWER(participant_1) = ? OR LOWER(participant_2) = ?)")
+          .bind(convId, authedUser, authedUser)
+          .first();
+        if (!histConv) return;
+
         const { results: msgs } = await db
           .prepare("SELECT * FROM messages WHERE conversation_id = ? ORDER BY sent_at ASC")
           .bind(convId)
@@ -857,8 +801,8 @@ export class ChatRoom {
         if (isNaN(convId)) return;
 
         const conv = await db
-          .prepare("SELECT * FROM conversations WHERE id = ?")
-          .bind(convId)
+          .prepare("SELECT * FROM conversations WHERE id = ? AND (LOWER(participant_1) = ? OR LOWER(participant_2) = ?)")
+          .bind(convId, authedUser, authedUser)
           .first<any>();
         if (!conv) return;
 
@@ -892,8 +836,8 @@ export class ChatRoom {
         if (isNaN(convId)) return;
 
         const conv = await db
-          .prepare("SELECT * FROM conversations WHERE id = ?")
-          .bind(convId)
+          .prepare("SELECT * FROM conversations WHERE id = ? AND (LOWER(participant_1) = ? OR LOWER(participant_2) = ?)")
+          .bind(convId, authedUser, authedUser)
           .first<any>();
         if (!conv) return;
 
@@ -934,9 +878,10 @@ export class ChatRoom {
 
       // ── Presence broadcast ────────────────────────────────────────────────
       case "PRESENCE_UPDATE": {
+        if (!authedUser) return;
         const payload = JSON.stringify({
           type: "PRESENCE_BROADCAST",
-          username: data.username || null,
+          username: authedUser,
           status: data.status,
         });
         this.broadcastAll(payload);

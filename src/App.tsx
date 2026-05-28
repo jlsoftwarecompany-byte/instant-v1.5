@@ -77,12 +77,14 @@ async function registerPushNotifications(username: string) {
       applicationServerKey: urlBase64ToUint8Array(publicKey)
     });
 
+    const sessionToken = localStorage.getItem("instant-session-token");
     await fetch("/api/save-subscription", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         username,
-        subscription
+        subscription,
+        sessionToken
       })
     });
     console.log("User's push subscription registered with sqlite index!");

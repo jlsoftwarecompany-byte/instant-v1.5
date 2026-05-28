@@ -256,6 +256,10 @@ export function installV15(app: Express, _wss: WebSocketServer, db: DB) {
   // --- Conversation privacy ---------------------------------------------
   app.post("/api/v15/conversations/:id/privacy", requireAuth, (req: AuthedRequest, res) => {
     const id = Number(req.params.id);
+    const conv = db.prepare(
+      "SELECT id FROM conversations WHERE id = ? AND (LOWER(participant_1) = ? OR LOWER(participant_2) = ?)"
+    ).get(id, req.authUser, req.authUser) as any;
+    if (!conv) return res.status(403).json({ error: "not a participant" });
     const { privacyMode, disappearAfterSeconds, anonymousMode } = req.body || {};
     const allowed = ["standard", "ephemeral", "anonymous", "incognito"];
     if (!allowed.includes(privacyMode)) return res.status(400).json({ error: "invalid privacyMode" });
@@ -267,7 +271,12 @@ export function installV15(app: Express, _wss: WebSocketServer, db: DB) {
   });
 
   app.post("/api/v15/conversations/:id/screenshot", requireAuth, (req: AuthedRequest, res) => {
-    analytics.track("privacy.screenshot", { id: Number(req.params.id) }, req.authUser ?? null);
+    const id = Number(req.params.id);
+    const conv = db.prepare(
+      "SELECT id FROM conversations WHERE id = ? AND (LOWER(participant_1) = ? OR LOWER(participant_2) = ?)"
+    ).get(id, req.authUser, req.authUser) as any;
+    if (!conv) return res.status(403).json({ error: "not a participant" });
+    analytics.track("privacy.screenshot", { id }, req.authUser ?? null);
     res.json({ ok: true });
   });
 
@@ -313,6 +322,10 @@ export function installV15(app: Express, _wss: WebSocketServer, db: DB) {
 
   app.post("/api/v15/circles/:id/members", requireAuth, (req: AuthedRequest, res) => {
     const id = Number(req.params.id);
+    const circle = db.prepare(
+      "SELECT id FROM circles WHERE id = ? AND owner_username = ?"
+    ).get(id, req.authUser) as any;
+    if (!circle) return res.status(403).json({ error: "not circle owner" });
     const { username } = req.body || {};
     if (!username) return res.status(400).json({ error: "username required" });
     try {
@@ -360,10 +373,10 @@ export function installV15(app: Express, _wss: WebSocketServer, db: DB) {
   });
 
   // --- Analytics ingest -------------------------------------------------
-  app.post("/api/v15/analytics", (req: AuthedRequest, res) => {
-    const { event, props, username } = req.body || {};
+  app.post("/api/v15/analytics", requireAuth, (req: AuthedRequest, res) => {
+    const { event, props } = req.body || {};
     if (!event) return res.status(400).json({ error: "event required" });
-    analytics.track(String(event), props || {}, username || null);
+    analytics.track(String(event), props || {}, req.authUser ?? null);
     res.json({ ok: true });
   });
 
