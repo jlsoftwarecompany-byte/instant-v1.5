@@ -188,10 +188,10 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
               className="w-48 h-48 object-cover rounded-xl cursor-zoom-in hover:brightness-95 transition pointer-events-auto"
               onClick={() => onClickPhoto(message.content)}
             />
-            <button 
+            <button
               type="button"
               onClick={() => onClickPhoto(message.content)}
-              className="w-full mt-1.5 py-1 text-[10px] font-bold text-center theme-text-primary hover:text-pink-500 flex items-center justify-center gap-1 cursor-pointer"
+              className="w-full mt-1.5 py-1 text-[10px] font-bold text-center text-[var(--foreground)] hover:text-pink-500 flex items-center justify-center gap-1 cursor-pointer"
             >
               <Camera className="w-3 h-3 text-pink-500" /> Open Viewer
             </button>
@@ -214,9 +214,9 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
             style={stage === "flash" ? { backgroundColor: "rgb(239, 68, 68)", color: "#ffffff" } : undefined}
             className={`
               px-4 py-3 rounded-2xl text-sm font-medium leading-relaxed font-sans shadow-md transition-colors relative
-              ${isMe 
-                ? "bg-gradient-to-tr from-[#FE2C55] to-[#a855f7] text-white rounded-br-xs border border-pink-500/10 shadow-pink-500/5" 
-                : "bg-zinc-100 dark:bg-zinc-900 theme-text-primary rounded-bl-xs border theme-border"
+              ${isMe
+                ? "bg-gradient-to-tr from-[#FE2C55] to-[#a855f7] text-white rounded-br-xs border border-pink-500/10 shadow-pink-500/5"
+                : "bg-zinc-100 dark:bg-zinc-900 text-[var(--foreground)] rounded-bl-xs border theme-border"
               }
             `}
           >

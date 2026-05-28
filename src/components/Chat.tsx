@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Message, TimerState, User } from "../types";
 import { wsService } from "../lib/ws";
-import { 
-  Send, ChevronLeft, Clock, ShieldAlert, Image as ImageIcon, Camera, 
-  Download, Sparkles, Check, CheckCheck, Loader2, Save, Star
+import {
+  Send, ChevronLeft, Clock, ShieldAlert, Image as ImageIcon, Camera,
+  Download, Sparkles, Check, Loader2, Star
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { MessageBubble } from "./MessageBubble";
@@ -36,10 +36,7 @@ export const Chat: React.FC<ChatProps> = ({
   const [timeLeftMs, setTimeLeftMs] = useState<number>(0);
   const [timerPercentage, setTimerPercentage] = useState<number>(100);
 
-  // Ending Chat Saving triggers
-  const [saveStatus, setSaveStatus] = useState<"idle" | "request_sent" | "request_received" | "saved">(
-    initialSaved ? "saved" : "idle"
-  );
+  // Feedback Toast
   const [feedbackToast, setFeedbackToast] = useState<string>("");
 
   // Photo Fullscreen Viewer
@@ -106,17 +103,13 @@ export const Chat: React.FC<ChatProps> = ({
             setActiveTimer(null);
           }
 
-          // Keep active conversations states sync (like saved status)
+          // Keep active conversations states sync
           const conv = data.conversations.find((c: any) => c.id === conversationId);
-          if (conv && conv.saved === 1) {
-            setSaveStatus("saved");
-          }
           break;
         }
 
         case "END_CHAT_REQUEST_BROADCAST":
           if (data.conversationId === conversationId) {
-            setSaveStatus("request_received");
             triggerToast(`${contact.nickname} wants to save this conversation`);
           }
           break;
@@ -129,7 +122,6 @@ export const Chat: React.FC<ChatProps> = ({
 
         case "CONVERSATION_SAVED_SUCCESS":
           if (data.conversationId === conversationId) {
-            setSaveStatus("saved");
             onLinksRewardTriggered(data.finalReward, "Conversation saved successfully");
           }
           break;
@@ -234,25 +226,7 @@ export const Chat: React.FC<ChatProps> = ({
     wsService.send(payload);
   };
 
-  // Trigger ending chat safely
-  const handleInitiateEndAndSave = () => {
-    if (saveStatus === "request_received") {
-      // If we already received from companion, let's confirm immediately to save!
-      wsService.send({
-        type: "END_CHAT_CONFIRM",
-        conversationId
-      });
-    } else {
-      setSaveStatus("request_sent");
-      wsService.send({
-        type: "END_CHAT_REQUEST",
-        conversationId
-      });
-      triggerToast("Ending chat safely initiated. Sent request to partner.");
-    }
-  };
-
-  // Download photo to browser / files
+// Download photo to browser / files
   const handleSavePhotoToDevice = () => {
     if (!viewerPhoto) return;
     
@@ -340,36 +314,6 @@ export const Chat: React.FC<ChatProps> = ({
           </div>
         </div>
 
-        {/* Save/Accept controls area */}
-        <div className="flex items-center gap-4">
-          {/* End Chat/Save Button */}
-          {saveStatus !== "saved" && (
-            <button
-              onClick={handleInitiateEndAndSave}
-              className={`
-                px-3 py-1.5 text-xs font-black rounded-xl transition flex items-center gap-1.5 shadow-md border cursor-pointer uppercase tracking-wider
-                ${saveStatus === "request_sent"
-                  ? "bg-amber-500/10 text-amber-500 border-amber-500/30"
-                  : saveStatus === "request_received"
-                    ? "bg-gradient-to-r from-[#FE2C55] to-[#a855f7] text-white animate-bounce border-transparent"
-                    : "text-white dark:text-zinc-200 bg-black dark:bg-zinc-900 border-transparent hover:text-zinc-100 dark:hover:text-[#FE2C55] hover:bg-zinc-800 dark:hover:bg-rose-500/5 hover:border-transparent dark:hover:border-pink-500/10"
-                }
-              `}
-            >
-              <Save className="w-3.5 h-3.5" />
-              {saveStatus === "request_sent" && "Awaiting..."}
-              {saveStatus === "request_received" && "Accept Save!"}
-              {saveStatus === "idle" && "Save & End"}
-            </button>
-          )}
-
-          {saveStatus === "saved" && (
-            <span className="px-2.5 py-1 bg-emerald-500/15 text-emerald-500 border border-emerald-500/25 text-[10px] font-black uppercase tracking-wider rounded-lg flex items-center gap-1">
-              <CheckCheck className="w-3.5 h-3.5" />
-              Saved Chat
-            </span>
-          )}
-        </div>
       </header>
 
       {/* Message List area */}
@@ -431,11 +375,11 @@ export const Chat: React.FC<ChatProps> = ({
             </div>
           )}
 
-          {/* Expiry Timer Customizer */}
-          <div className="mb-4 bg-zinc-50/50 dark:bg-zinc-900/40 p-3 rounded-2xl border theme-border space-y-3">
-            <div className="flex items-center justify-between">
+          {/* Message Expiry Timer — Quick Presets Only */}
+          <div className="mb-4 bg-zinc-50/50 dark:bg-zinc-900/40 p-3 rounded-2xl border theme-border">
+            <div className="flex items-center justify-between mb-2.5">
               <span className="text-[10px] font-black tracking-widest text-[var(--foreground)] opacity-75 uppercase flex items-center gap-1.5">
-                <Clock className="w-3.5 h-3.5 text-pink-500 animate-pulse" /> Message Expiry Timer:
+                <Clock className="w-3.5 h-3.5 text-pink-500 animate-pulse" /> Message Expiry:
               </span>
               <span className="px-2 py-0.5 text-xs font-black rounded-lg bg-pink-500/15 text-pink-500 border border-pink-500/20 shadow-xs animate-pulse">
                 {(() => {
@@ -448,47 +392,29 @@ export const Chat: React.FC<ChatProps> = ({
               </span>
             </div>
 
-            {/* Glowing Range Control */}
-            <div className="flex items-center gap-3">
-              <span className="text-[10px] font-bold text-zinc-400 select-none">5s</span>
-              <input
-                type="range"
-                min="5"
-                max="3600"
-                step="5"
-                value={Math.round(timerDuration / 1000)}
-                onChange={(e) => setTimerDuration(parseInt(e.target.value, 10) * 1000)}
-                className="flex-1 w-full h-2 rounded-lg cursor-pointer accent-pink-500 outline-none"
-              />
-              <span className="text-[10px] font-bold text-zinc-400 select-none">60m</span>
-            </div>
-
-            {/* Quick preset points */}
-            <div className="flex justify-between items-center pt-1 border-t border-purple-500/5">
-              <span className="text-[9px] font-bold text-zinc-400">Tap quick select:</span>
-              <div className="flex gap-1 animate-pulse">
-                {[
-                  { label: "10s 🔥", val: 10000 },
-                  { label: "30s", val: 30000 },
-                  { label: "5m", val: 300000 },
-                  { label: "30m", val: 1800000 }
-                ].map(opt => (
-                  <button
-                    key={opt.val}
-                    type="button"
-                    onClick={() => setTimerDuration(opt.val)}
-                    className={`
-                      px-2 py-0.5 text-[9px] font-black rounded-md transition duration-150 border cursor-pointer
-                      ${timerDuration === opt.val
-                        ? "bg-gradient-to-r from-[#FE2C55] to-[#a855f7] border-transparent text-white shadow-md scale-105"
-                        : "bg-white dark:bg-zinc-950/60 border-zinc-300 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400 hover:text-pink-500 hover:bg-black/5 dark:hover:bg-zinc-800"
-                      }
-                    `}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
+            {/* Four Timer Preset Buttons */}
+            <div className="grid grid-cols-4 gap-2">
+              {[
+                { label: "10s 🔥", val: 10000 },
+                { label: "30s", val: 30000 },
+                { label: "5m", val: 300000 },
+                { label: "30m", val: 1800000 }
+              ].map(opt => (
+                <button
+                  key={opt.val}
+                  type="button"
+                  onClick={() => setTimerDuration(opt.val)}
+                  className={`
+                    px-2.5 py-2 text-[9px] font-black rounded-lg transition duration-150 border cursor-pointer
+                    ${timerDuration === opt.val
+                      ? "bg-gradient-to-r from-[#FE2C55] to-[#a855f7] border-transparent text-white shadow-md scale-105"
+                      : "bg-zinc-100 dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700 text-zinc-500 dark:text-zinc-300 hover:text-pink-500 hover:bg-zinc-200 dark:hover:bg-zinc-700"
+                    }
+                  `}
+                >
+                  {opt.label}
+                </button>
+              ))}
             </div>
           </div>
 
@@ -506,7 +432,7 @@ export const Chat: React.FC<ChatProps> = ({
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="p-3.5 rounded-xl border theme-border bg-black/5 dark:bg-zinc-900 hover:bg-black/10 dark:hover:bg-zinc-800 text-zinc-600 hover:text-pink-500 dark:text-zinc-400 transition flex items-center justify-center shadow-xs shrink-0 cursor-pointer"
+              className="p-3.5 rounded-xl border theme-border bg-black/5 dark:bg-zinc-900 hover:bg-black/10 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300 hover:text-pink-500 transition flex items-center justify-center shadow-xs shrink-0 cursor-pointer"
               title="Upload Photo File"
             >
               <ImageIcon className="w-5 h-5" />
@@ -585,7 +511,7 @@ export const Chat: React.FC<ChatProps> = ({
               <h3 className="text-white text-sm font-bold tracking-tight">Fullscreen Viewer</h3>
               <button
                 onClick={() => setViewerPhoto(null)}
-                className="text-zinc-600 hover:text-white px-3 py-1 bg-black/40 dark:bg-zinc-900 border border-white/10 rounded-lg text-xs cursor-pointer hover:bg-black/60 dark:hover:bg-zinc-800 transition"
+                className="text-zinc-200 hover:text-white px-3 py-1 bg-black/40 dark:bg-zinc-900 border border-white/10 rounded-lg text-xs cursor-pointer hover:bg-black/60 dark:hover:bg-zinc-800 transition"
               >
                 Close Viewer
               </button>
