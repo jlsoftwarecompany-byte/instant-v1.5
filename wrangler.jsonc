@@ -1,26 +1,39 @@
 {
+  "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "instant",
   "main": "worker/index.ts",
-  "compatibility_date": "2024-09-23",
+  "compatibility_date": "2026-05-27",
   "compatibility_flags": ["nodejs_compat"],
+
+  // Static assets — populated by `vite build` into ./dist
+  // not_found_handling: "single-page-application" serves index.html for any
+  // unmatched path so React Router handles client-side navigation correctly.
   "assets": {
     "directory": "./dist",
-    "binding": "ASSETS"
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
   },
+
+  // D1 (SQLite-compatible) — replaces better-sqlite3
+  // Run: npx wrangler d1 create instant-db  → paste the returned database_id below
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "instant-db",
-      // Replace this with your D1 database_id from the Cloudflare dashboard
       "database_id": "2d07c23b-aaf8-42f2-bd8b-86d1a0e17e30"
     }
   ],
+
+  // R2 — replaces ./media-store local disk
+  // Run: npx wrangler r2 bucket create instant-media
   "r2_buckets": [
     {
-      "binding": "MEDIA",
+      "binding": "BUCKET",
       "bucket_name": "instant-media"
     }
   ],
+
+  // Durable Object — global WebSocket hub (replaces in-memory clients Map + setInterval)
   "durable_objects": {
     "bindings": [
       {
@@ -34,5 +47,10 @@
       "tag": "v1",
       "new_sqlite_classes": ["ChatRoom"]
     }
-  ]
+  ],
+
+  // Non-sensitive public vars — secrets go via: npx wrangler secret put <NAME>
+  // Required secrets: VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, JWT_SECRET
+  // Optional secrets: VITE_GEMINI_API_KEY
+  "vars": {}
 }

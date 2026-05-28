@@ -6,7 +6,12 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Cloudflare Workers
 .wrangler/
 .dev.vars
+.dev.vars.*
+
+# local SQLite DB (Express dev only)
 instant.db
 media-store/

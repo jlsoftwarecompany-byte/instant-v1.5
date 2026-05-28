@@ -41,8 +41,9 @@ class MessageSyncService {
     this.isConnecting = true;
 
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    // Construct dynamic url with fallback
-    const wsUrl = `${protocol}//${window.location.host}`;
+    // Use /ws path so Cloudflare Workers ASSETS binding doesn't intercept
+    // the upgrade before it reaches the Worker's fetch() handler.
+    const wsUrl = `${protocol}//${window.location.host}/ws`;
 
     console.log(`Connecting Web Socket to: ${wsUrl}`);
     
