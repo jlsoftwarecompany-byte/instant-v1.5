@@ -118,3 +118,56 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
   expires_at INTEGER NOT NULL,
   revoked INTEGER DEFAULT 0
 );
+
+-- =========================================================================
+-- Performance indexes
+-- =========================================================================
+
+-- users: lookups by session_token (AUTH_LOGOUT, AUTH_VERIFY_SESSION)
+CREATE INDEX IF NOT EXISTS idx_users_session_token ON users (session_token);
+
+-- users: ORDER BY links DESC for discover-users feed
+CREATE INDEX IF NOT EXISTS idx_users_links ON users (links DESC);
+
+-- friendships: lookups by either participant
+CREATE INDEX IF NOT EXISTS idx_friendships_requester ON friendships (requester_username);
+CREATE INDEX IF NOT EXISTS idx_friendships_receiver ON friendships (receiver_username);
+
+-- conversations: lookups by either participant
+CREATE INDEX IF NOT EXISTS idx_conversations_participant_1 ON conversations (participant_1);
+CREATE INDEX IF NOT EXISTS idx_conversations_participant_2 ON conversations (participant_2);
+
+-- timers: JOIN / WHERE on conversation_id
+CREATE INDEX IF NOT EXISTS idx_timers_conversation_id ON timers (conversation_id);
+
+-- messages: filtered by conversation_id, ordered by sent_at
+CREATE INDEX IF NOT EXISTS idx_messages_conversation_id_sent_at ON messages (conversation_id, sent_at);
+
+-- messages: TTL sweep on expires_at
+CREATE INDEX IF NOT EXISTS idx_messages_expires_at ON messages (expires_at);
+
+-- messages: bulk update of expired flag per conversation
+CREATE INDEX IF NOT EXISTS idx_messages_conversation_expired ON messages (conversation_id, expired);
+
+-- media: TTL sweep on expires_at
+CREATE INDEX IF NOT EXISTS idx_media_expires_at ON media (expires_at);
+
+-- circles: listing by owner, ordered by created_at DESC
+CREATE INDEX IF NOT EXISTS idx_circles_owner_created ON circles (owner_username, created_at DESC);
+
+-- circle_members: subquery SELECT circle_id WHERE member_username = ?
+CREATE INDEX IF NOT EXISTS idx_circle_members_member ON circle_members (member_username);
+
+-- stories: feed query filters on expires_at, author, circle_id; ordered by created_at DESC
+CREATE INDEX IF NOT EXISTS idx_stories_expires_at ON stories (expires_at);
+CREATE INDEX IF NOT EXISTS idx_stories_author ON stories (author_username);
+CREATE INDEX IF NOT EXISTS idx_stories_circle_id ON stories (circle_id);
+CREATE INDEX IF NOT EXISTS idx_stories_created_at ON stories (created_at DESC);
+
+-- analytics_events: filtered by username and event
+CREATE INDEX IF NOT EXISTS idx_analytics_username ON analytics_events (username);
+CREATE INDEX IF NOT EXISTS idx_analytics_event ON analytics_events (event);
+
+-- refresh_tokens: lookup/revoke by username; TTL sweep on expires_at + revoked
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_username ON refresh_tokens (username);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_expires_revoked ON refresh_tokens (expires_at, revoked);
