@@ -1,0 +1,6 @@
+{
+  "name": "Instant",
+  "description": "Real-time ephemeral messaging PWA featuring persistent SQLite database, custom WebSocket sync server, secure VAPID push notifications, and adaptive theme systems.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
