@@ -47,6 +47,10 @@ export const Chat: React.FC<ChatProps> = ({
   // Photo Fullscreen Viewer
   const [viewerPhoto, setViewerPhoto] = useState<string | null>(null);
 
+  // Track which messages are currently visible in viewport
+  const messageVisibilityRef = useRef<Set<number>>(new Set());
+  const observerRef = useRef<IntersectionObserver | null>(null);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -95,6 +99,16 @@ export const Chat: React.FC<ChatProps> = ({
               duration_ms: data.message.timer_duration
             };
             setActiveTimer(newTimer);
+          }
+          break;
+
+        case "MESSAGE_SEEN_BROADCAST":
+          if (data.conversationId === conversationId && data.messageId) {
+            setMessages(prev =>
+              prev.map(msg =>
+                msg.id === data.messageId ? { ...msg, seen: true } : msg
+              )
+            );
           }
           break;
 
@@ -175,6 +189,64 @@ export const Chat: React.FC<ChatProps> = ({
   // Auto scroll to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  // Setup Intersection Observer to detect when messages become visible
+  useEffect(() => {
+    // Create observer that triggers when a message enters the viewport
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          const messageId = parseInt(entry.target.getAttribute('data-message-id') || '0', 10);
+
+          // When message enters viewport (50% visible)
+          if (entry.isIntersecting && messageId > 0) {
+            // Only mark as seen if:
+            // 1. We haven't already marked it
+            // 2. We are the receiver (sender.toLowerCase() !== currentUser.username)
+            if (!messageVisibilityRef.current.has(messageId)) {
+              const message = messages.find(m => m.id === messageId);
+              if (message && message.sender.toLowerCase() !== currentUser.username.toLowerCase()) {
+                messageVisibilityRef.current.add(messageId);
+
+                // Send MESSAGE_SEEN to server
+                wsService.send({
+                  type: "MESSAGE_SEEN",
+                  conversationId,
+                  messageId,
+                  seenAt: Date.now()
+                });
+              }
+            }
+          }
+        });
+      },
+      { threshold: 0.5 }  // Trigger when 50% of message is visible
+    );
+
+    observerRef.current = observer;
+    return () => {
+      if (observerRef.current) {
+        observerRef.current.disconnect();
+      }
+    };
+  }, [conversationId, currentUser.username, messages]);
+
+  // Observe message elements
+  useEffect(() => {
+    if (!observerRef.current) return;
+
+    // Observe all message elements
+    const messageElements = document.querySelectorAll('[data-message-id]');
+    messageElements.forEach((el) => {
+      observerRef.current?.observe(el);
+    });
+
+    return () => {
+      messageElements.forEach((el) => {
+        observerRef.current?.unobserve(el);
+      });
+    };
   }, [messages]);
 
   const triggerToast = (msg: string) => {

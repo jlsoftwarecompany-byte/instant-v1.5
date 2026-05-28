@@ -152,6 +152,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
       animate={{ opacity: 1, scale: 1, y: 0 }}
       transition={{ type: "spring", stiffness: 380, damping: 26 }}
       className={`flex ${isMe ? "justify-end" : "justify-start"} relative w-full`}
+      data-message-id={message.id}
     >
       <div className={`max-w-[80%] flex flex-col ${isMe ? "items-end" : "items-start"}`}>
         
@@ -252,6 +253,12 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
           <span>
             {isMe ? "You" : contact.nickname} • {new Date(message.sent_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
           </span>
+          {/* Checkmark indicator for sent messages */}
+          {isMe && stage !== "expired" && (
+            <span className={`ml-auto text-[9px] font-bold ${message.seen ? "text-cyan-400" : "text-zinc-400"}`}>
+              {message.seen ? "✓✓" : "✓"}
+            </span>
+          )}
         </span>
 
       </div>

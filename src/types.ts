@@ -54,6 +54,7 @@ export interface Message {
   // v1.5
   expires_at?: number | null;
   media_id?: number | null;
+  seen?: boolean;  // true if receiver has viewed the message
 }
 
 export interface TimerState {
