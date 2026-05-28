@@ -27,7 +27,7 @@ const LINKER_MASCOTS = [
 
 const LINKER_AURAS = [
   { key: "pink", label: "Neon Pink", class: "bg-[#FE2C55]/25 text-[#FE2C55] border-[#FE2C55]/40 shadow-[0_0_12px_#FE2C55_inset]" },
-  { key: "cyan", label: "Vapor Cyan", class: "bg-[#25F4EE]/25 text-[#25F4EE] border-[#25F4EE]/40 shadow-[0_0_12px_#25F4EE_inset]" },
+  { key: "cyan", label: "Vapor Cyan", class: "bg-[#25F4EE]/25 text-cyan-700 dark:text-[#25F4EE] border-[#25F4EE]/40 shadow-[0_0_12px_#25F4EE_inset]" },
   { key: "purple", label: "Cyber Purple", class: "bg-[#a855f7]/25 text-[#a855f7] border-[#a855f7]/40 shadow-[0_0_12px_#a855f7_inset]" },
   { key: "gold", label: "Gilded Gold", class: "bg-[#eab308]/25 text-[#eab308] border-[#eab308]/40 shadow-[0_0_12px_#eab308_inset]" },
   { key: "green", label: "Acid Green", class: "bg-[#22c55e]/25 text-[#22c55e] border-[#22c55e]/40 shadow-[0_0_12px_#22c55e_inset]" },
@@ -228,7 +228,7 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onBack, onUserU
 
         {/* Display Name Edit section */}
         <section className="space-y-4">
-          <h3 className="text-xs font-black tracking-widest text-[#25F4EE] uppercase">
+          <h3 className="text-xs font-black tracking-widest text-cyan-700 dark:text-[#25F4EE] uppercase">
             Edit Nickname
           </h3>
           <form onSubmit={handleSaveNickname} className="p-5 rounded-3xl theme-card border space-y-4">

@@ -212,7 +212,7 @@ export const LinkerGenerator: React.FC<LinkerGeneratorProps> = ({ currentUser, o
 
                   <span className={`px-2 py-0.5 font-bold uppercase tracking-wider text-[9px] rounded-md
                     ${linker.color === "pink" ? "bg-[#FE2C55]/10 text-[#FE2C55]" : ""}
-                    ${linker.color === "cyan" ? "bg-[#25F4EE]/10 text-[#25F4EE]" : ""}
+                    ${linker.color === "cyan" ? "bg-[#25F4EE]/10 text-cyan-700 dark:text-[#25F4EE]" : ""}
                     ${linker.color === "purple" ? "bg-[#a855f7]/10 text-[#a855f7]" : ""}
                     ${linker.color === "gold" ? "bg-[#eab308]/10 text-[#eab308]" : ""}
                     ${linker.color === "green" ? "bg-[#22c55e]/10 text-[#22c55e]" : ""}

@@ -36,7 +36,7 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       root.style.setProperty("--foreground", "#1a0833"); // Deep violet text
       root.style.setProperty("--card-bg", "#ffffff"); // Pure white card
       root.style.setProperty("--border-color", "#dbccfc"); // Pastel lilac border
-      root.style.setProperty("--accent-text", "#fe2c55"); // TikTok pink accent action
+      root.style.setProperty("--accent-text", "#1a0833"); // Deep violet — readable on light backgrounds
       root.style.setProperty("--muted-text", "#8a3afc"); // Vivid rich purple
       root.style.backgroundColor = "#f6f2ff";
     }

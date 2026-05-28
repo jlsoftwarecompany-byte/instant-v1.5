@@ -98,7 +98,7 @@ export const Profile: React.FC<ProfileProps> = ({ currentUser, friendsList, onBa
 
         {/* Streaks and Badges */}
         <section className="space-y-4">
-          <h3 className="text-xs font-black tracking-widest text-[#25F4EE] uppercase">
+          <h3 className="text-xs font-black tracking-widest text-cyan-700 dark:text-[#25F4EE] uppercase">
             🏆 Achievement unlocked
           </h3>
           <div className="grid grid-cols-3 gap-3">
