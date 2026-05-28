@@ -55,6 +55,8 @@ export interface Message {
   expires_at?: number | null;
   media_id?: number | null;
   seen?: boolean;  // true if receiver has viewed the message
+  message_type?: "opener" | "normal";  // distinguishes message phase
+  is_responded_to?: number;  // tracks if opener has been answered
 }
 
 export interface TimerState {

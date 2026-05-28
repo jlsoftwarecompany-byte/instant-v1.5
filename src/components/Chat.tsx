@@ -41,6 +41,13 @@ export const Chat: React.FC<ChatProps> = ({
     initialSaved ? "saved" : "idle"
   );
 
+  // Conversation Phase: Opener (waiting for response) or Active (normal messages)
+  const [conversationPhase, setConversationPhase] = useState<"awaiting_response" | "active">("awaiting_response");
+  const [openerInitiator, setOpenerInitiator] = useState<string | null>(null);
+  const [isWaitingForOpenerResponse, setIsWaitingForOpenerResponse] = useState(false);
+  const [openerMessageId, setOpenerMessageId] = useState<number | null>(null);
+  const [openerTimerChoice, setOpenerTimerChoice] = useState<"10m" | "1hr" | "12hr" | null>(null);
+
   // Feedback Toast
   const [feedbackToast, setFeedbackToast] = useState<string>("");
 
@@ -248,6 +255,49 @@ export const Chat: React.FC<ChatProps> = ({
       });
     };
   }, [messages]);
+
+  // Detect and update conversation phase based on messages
+  useEffect(() => {
+    if (messages.length === 0) {
+      // No messages yet — current user should be able to send opener
+      setConversationPhase("awaiting_response");
+      setOpenerInitiator(currentUser.username);
+    } else if (messages.length === 1) {
+      // One message (an opener) exists
+      const firstMsg = messages[0];
+      if (firstMsg.message_type === "opener" || !firstMsg.message_type) {
+        setOpenerInitiator(firstMsg.sender);
+        setConversationPhase("awaiting_response");
+        setOpenerMessageId(firstMsg.id);
+        // If current user sent the opener, mark as waiting
+        if (firstMsg.sender === currentUser.username) {
+          setIsWaitingForOpenerResponse(true);
+          // Extract timer choice
+          if (firstMsg.timer_duration === 600000) setOpenerTimerChoice("10m");
+          else if (firstMsg.timer_duration === 3600000) setOpenerTimerChoice("1hr");
+          else if (firstMsg.timer_duration === 43200000) setOpenerTimerChoice("12hr");
+        }
+      }
+    } else if (messages.length >= 2) {
+      // Multiple messages — check if opener has been responded to
+      const hasResponseToOpener = messages.some(m =>
+        m.message_type === "opener" && m.is_responded_to === 1
+      );
+      if (hasResponseToOpener) {
+        setConversationPhase("active");
+      } else {
+        // Still in opener phase
+        const openerMsg = messages.find(m => m.message_type === "opener" || !m.message_type);
+        if (openerMsg) {
+          setOpenerInitiator(openerMsg.sender);
+          setOpenerMessageId(openerMsg.id);
+          if (openerMsg.timer_duration === 600000) setOpenerTimerChoice("10m");
+          else if (openerMsg.timer_duration === 3600000) setOpenerTimerChoice("1hr");
+          else if (openerMsg.timer_duration === 43200000) setOpenerTimerChoice("12hr");
+        }
+      }
+    }
+  }, [messages.length, currentUser.username]);
 
   const triggerToast = (msg: string) => {
     setFeedbackToast(msg);
