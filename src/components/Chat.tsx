@@ -36,6 +36,11 @@ export const Chat: React.FC<ChatProps> = ({
   const [timeLeftMs, setTimeLeftMs] = useState<number>(0);
   const [timerPercentage, setTimerPercentage] = useState<number>(100);
 
+  // Save Status (needed for message bubble state management)
+  const [saveStatus, setSaveStatus] = useState<"idle" | "request_sent" | "request_received" | "saved">(
+    initialSaved ? "saved" : "idle"
+  );
+
   // Feedback Toast
   const [feedbackToast, setFeedbackToast] = useState<string>("");
 
@@ -105,11 +110,15 @@ export const Chat: React.FC<ChatProps> = ({
 
           // Keep active conversations states sync
           const conv = data.conversations.find((c: any) => c.id === conversationId);
+          if (conv && conv.saved === 1) {
+            setSaveStatus("saved");
+          }
           break;
         }
 
         case "END_CHAT_REQUEST_BROADCAST":
           if (data.conversationId === conversationId) {
+            setSaveStatus("request_received");
             triggerToast(`${contact.nickname} wants to save this conversation`);
           }
           break;
@@ -122,6 +131,7 @@ export const Chat: React.FC<ChatProps> = ({
 
         case "CONVERSATION_SAVED_SUCCESS":
           if (data.conversationId === conversationId) {
+            setSaveStatus("saved");
             onLinksRewardTriggered(data.finalReward, "Conversation saved successfully");
           }
           break;
