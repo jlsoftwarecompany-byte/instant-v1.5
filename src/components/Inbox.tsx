@@ -390,13 +390,6 @@ export const Inbox: React.FC<InboxProps> = ({
                   const conversation = activeConversations.find(c => c.id === convId);
                   const isSaved = conversation?.saved === 1;
 
-                  // Opener phase detection: a conversation that hasn't been
-                  // "started" yet is still awaiting an opener response.
-                  const isOpenerPhase = conversation ? conversation.conversation_started === 0 : false;
-                  const isInitiator = conversation
-                    ? conversation.participant_1.toLowerCase() === currentUser.username
-                    : false;
-
                   return (
                     <motion.div
                       key={friend.username}
@@ -440,21 +433,7 @@ export const Inbox: React.FC<InboxProps> = ({
                       </div>
 
                       <div className="flex items-center gap-3">
-                        {/* Opener phase badges */}
-                        {isOpenerPhase && !isSaved && (
-                          isInitiator ? (
-                            <span className="px-2 py-0.5 text-[9px] font-black text-amber-600 dark:text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-md tracking-wider uppercase flex items-center gap-1">
-                              <Clock className="w-2.5 h-2.5 shrink-0 animate-pulse" />
-                              Awaiting response
-                            </span>
-                          ) : (
-                            <span className="px-2 py-0.5 text-[9px] font-black text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-md tracking-wider uppercase flex items-center gap-1 animate-pulse">
-                              <Sparkles className="w-2.5 h-2.5 shrink-0" />
-                              Respond to start
-                            </span>
-                          )
-                        )}
-                        {hasTimer && !isSaved && !isOpenerPhase && (
+                        {hasTimer && !isSaved && (
                           <span className="px-2 py-0.5 text-[9px] font-black text-rose-500 bg-rose-500/5 border border-rose-500/15 rounded-md tracking-wider uppercase flex items-center gap-1 animate-pulse">
                             <Clock className="w-2.5 h-2.5 shrink-0" />
                             EXPIRY RUNNING

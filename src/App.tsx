@@ -14,6 +14,7 @@ import { Settings } from "./components/Settings";
 import { Profile } from "./components/Profile";
 import { LinkerGenerator } from "./components/LinkerGenerator";
 import { ParticleBurst } from "./components/ParticleBurst";
+import { IOSInstallBanner } from "./components/IOSInstallBanner";
 import { wsService } from "./lib/ws";
 import { User, Friendship, Conversation, TimerState } from "./types";
 import { RefreshCw, Signal, SignalZero, WifiOff } from "lucide-react";
@@ -120,6 +121,16 @@ function MainApp() {
 
   // Link burst animation trigger overlays
   const [rewardBurst, setRewardBurst] = useState<{ amount: number; reason: string } | null>(null);
+
+  // Capture Android beforeinstallprompt so Settings can trigger it
+  useEffect(() => {
+    const handler = (e: Event) => {
+      e.preventDefault();
+      (window as any).__installPrompt = e;
+    };
+    window.addEventListener('beforeinstallprompt', handler);
+    return () => window.removeEventListener('beforeinstallprompt', handler);
+  }, []);
 
   // Initial reconnect checks on startup
   useEffect(() => {
@@ -446,6 +457,7 @@ function MainApp() {
         />
       )}
 
+      <IOSInstallBanner />
     </div>
   );
 }
