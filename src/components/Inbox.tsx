@@ -20,6 +20,7 @@ interface InboxProps {
   timersList: any[];
   discoverUsers: { username: string; nickname: string; links: number; linker_avatar?: string; linker_color?: string }[];
   savedConversations: SavedConversation[];
+  lastMessages: Record<number, { content: string; sender: string; is_photo: number; sent_at: number }>;
   onStartNewConversation: (friend: FriendInfo, conversationId: number) => void;
   onOpenSavedChat: (saved: SavedConversation) => void;
   onOpenSavedConversations?: (friend: FriendInfo) => void;
@@ -39,6 +40,7 @@ export const Inbox: React.FC<InboxProps> = ({
   timersList,
   discoverUsers = [],
   savedConversations = [],
+  lastMessages = {},
   onStartNewConversation,
   onOpenSavedChat,
   onOpenSavedConversations,
@@ -56,6 +58,14 @@ export const Inbox: React.FC<InboxProps> = ({
 
   // Inbox tab: live Messages vs permanently Saved Chats
   const [activeTab, setActiveTab] = useState<"messages" | "saved">("messages");
+
+  // Force re-render every second to animate live timer bars (only while timers exist)
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (timersList.length === 0) return;
+    const id = setInterval(() => setTick(t => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [timersList.length]);
 
   // Add friend states
   const [showAddFriendModal, setShowAddFriendModal] = useState(false);
@@ -343,6 +353,23 @@ export const Inbox: React.FC<InboxProps> = ({
                   const showAwaiting = !isSaved && phase === "awaiting_response" && !!openerInit && iAmInitiator;
                   const showRespond = !isSaved && phase === "awaiting_response" && !!openerInit && !iAmInitiator;
 
+                  // Live timer percentage for the conversation panel
+                  const activeTimer = convId
+                    ? timersList.find(t => t.conversation_id === convId)
+                    : null;
+
+                  const timerPercent = (() => {
+                    if (!activeTimer) return null;
+                    const elapsed = Date.now() - activeTimer.started_at;
+                    const pct = Math.max(0, Math.min(100, 100 - (elapsed / activeTimer.duration_ms) * 100));
+                    return pct;
+                  })();
+
+                  const lastMsg = convId ? lastMessages[convId] : null;
+
+                  // Conversation is "live" if there's an active timer OR an opener is outstanding
+                  const conversationIsLive = !!activeTimer || (!!openerInit && phase === "awaiting_response");
+
                   return (
                     <motion.div
                       key={friend.username}
@@ -378,7 +405,7 @@ export const Inbox: React.FC<InboxProps> = ({
                         </div>
 
                         <div className="text-left min-w-0">
-                          <h3 className="font-extrabold text-sm theme-text-primary flex items-center gap-1.5 leading-none uppercase truncate group-hover:underline">
+                          <h3 className="font-extrabold text-sm text-zinc-900 dark:text-white flex items-center gap-1.5 leading-none uppercase truncate group-hover:underline">
                             {friend.nickname}
                           </h3>
                           <div className="flex items-center gap-1.5 mt-1 flex-wrap">
@@ -412,43 +439,69 @@ export const Inbox: React.FC<InboxProps> = ({
                         </div>
                       </div>
 
-                      {/* Right: two icon action buttons */}
-                      <div className="flex items-center gap-2 shrink-0 ml-3">
-                        {/* Start / open the live conversation */}
-                        <motion.button
-                          whileTap={{ scale: 0.90 }}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (convId) onStartNewConversation(friend, convId);
-                          }}
-                          title="Start new conversation"
-                          className="w-10 h-10 flex items-center justify-center rounded-xl
-                            bg-gradient-to-br from-[#FE2C55]/10 to-[#a855f7]/10
-                            border border-[#FE2C55]/20
-                            text-[#FE2C55] hover:from-[#FE2C55]/20 hover:to-[#a855f7]/20
-                            transition active:scale-90 cursor-pointer"
-                        >
-                          <MessageSquarePlus className="w-[18px] h-[18px]" />
-                        </motion.button>
+                      {/* Right: conditional panel — NEW CHAT button OR live conversation panel */}
+                      <div className="shrink-0 ml-3 w-[48%]" onClick={(e) => e.stopPropagation()}>
+                        {conversationIsLive ? (
+                          /* ── LIVE CONVERSATION PANEL ── */
+                          <motion.button
+                            whileTap={{ scale: 0.98 }}
+                            onClick={() => { if (convId) onStartNewConversation(friend, convId); }}
+                            className="w-full h-[52px] rounded-2xl border theme-border bg-zinc-50 dark:bg-zinc-900/60
+                              flex flex-col justify-between overflow-hidden cursor-pointer
+                              hover:bg-zinc-100 dark:hover:bg-zinc-800/80 transition-colors"
+                          >
+                            {/* Last message preview */}
+                            <div className="flex-1 px-3 pt-2 flex items-center min-h-0">
+                              {lastMsg ? (
+                                <p className="text-[10px] font-semibold text-zinc-500 dark:text-zinc-400 truncate leading-tight w-full text-left">
+                                  {lastMsg.is_photo
+                                    ? "📷 Photo"
+                                    : lastMsg.sender.toLowerCase() === currentUser.username.toLowerCase()
+                                      ? `You: ${lastMsg.content}`
+                                      : lastMsg.content
+                                  }
+                                </p>
+                              ) : (
+                                <p className="text-[10px] font-semibold text-zinc-400 italic truncate w-full text-left">
+                                  {showAwaiting ? "Waiting for reply…" : showRespond ? "Tap to respond!" : "Active…"}
+                                </p>
+                              )}
+                            </div>
 
-                        {/* View past saved conversations */}
-                        <motion.button
-                          whileTap={{ scale: 0.90 }}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (onOpenSavedConversations) onOpenSavedConversations(friend);
-                            else setActiveTab("saved");
-                          }}
-                          title="View saved conversations"
-                          className="w-10 h-10 flex items-center justify-center rounded-xl
-                            bg-zinc-100 dark:bg-zinc-900
-                            border theme-border
-                            text-zinc-500 dark:text-zinc-300
-                            hover:bg-zinc-200 dark:hover:bg-zinc-800
-                            transition active:scale-90 cursor-pointer"
-                        >
-                          <BookOpen className="w-[18px] h-[18px]" />
-                        </motion.button>
+                            {/* Timer bar */}
+                            <div className="h-[5px] w-full bg-zinc-200 dark:bg-zinc-800 relative overflow-hidden">
+                              {timerPercent !== null ? (
+                                <motion.div
+                                  className={`h-full absolute left-0 top-0 rounded-r-full transition-none
+                                    ${timerPercent > 50
+                                      ? "bg-gradient-to-r from-emerald-500 to-cyan-400"
+                                      : timerPercent > 20
+                                        ? "bg-gradient-to-r from-amber-400 to-orange-400"
+                                        : "bg-gradient-to-r from-rose-500 to-pink-500"
+                                    }`}
+                                  style={{ width: `${timerPercent}%` }}
+                                />
+                              ) : (
+                                /* Opener awaiting — show a pulsing placeholder bar */
+                                <div className="h-full w-full bg-gradient-to-r from-[#25F4EE]/40 to-[#a855f7]/40 animate-pulse" />
+                              )}
+                            </div>
+                          </motion.button>
+                        ) : (
+                          /* ── NEW CHAT BUTTON ── */
+                          <motion.button
+                            whileTap={{ scale: 0.95 }}
+                            onClick={() => { if (convId) onStartNewConversation(friend, convId); }}
+                            className="w-full h-[52px] flex items-center justify-center gap-2 rounded-2xl
+                              bg-gradient-to-r from-[#FE2C55] to-[#a855f7]
+                              text-white font-black text-[11px] uppercase tracking-widest
+                              shadow-md shadow-pink-500/20
+                              hover:opacity-90 active:scale-95 transition cursor-pointer"
+                          >
+                            <MessageSquarePlus className="w-4 h-4 shrink-0" />
+                            New Chat
+                          </motion.button>
+                        )}
                       </div>
                     </motion.div>
                   );

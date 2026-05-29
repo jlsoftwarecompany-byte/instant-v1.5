@@ -392,6 +392,25 @@ function broadcastFriendUpdateForUser(username: string) {
     ORDER BY sc.saved_at DESC
   `).all(uLower, uLower, uLower) as any[];
 
+  // Last non-expired message per conversation for inbox preview
+  const lastMessagesMap: Record<number, { content: string; sender: string; is_photo: number; sent_at: number }> = {};
+  for (const conv of conversations) {
+    const lastMsg = db.prepare(
+      `SELECT content, sender, is_photo, sent_at
+       FROM messages
+       WHERE conversation_id = ? AND expired = 0
+       ORDER BY sent_at DESC LIMIT 1`
+    ).get(conv.id) as any;
+    if (lastMsg) {
+      lastMessagesMap[conv.id] = {
+        content: lastMsg.content,
+        sender: lastMsg.sender,
+        is_photo: lastMsg.is_photo,
+        sent_at: lastMsg.sent_at,
+      };
+    }
+  }
+
   // Send update directly to this user if online
   const socket = clients.get(uLower);
   if (socket && socket.readyState === WebSocket.OPEN) {
@@ -403,6 +422,7 @@ function broadcastFriendUpdateForUser(username: string) {
       discoverUsers,
       ignoredUsers: ignoredUserDetails,
       savedConversations,
+      lastMessages: lastMessagesMap,
       timers: timers.map(t => ({
         conversation_id: t.conversation_id,
         timer_type: t.timer_type,

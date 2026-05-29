@@ -1324,6 +1324,30 @@ export class ChatRoom {
       .bind(uLower, uLower, uLower)
       .all<any>();
 
+    // Fetch the last non-expired message per conversation for inbox preview
+    const lastMessagesMap: Record<number, { content: string; sender: string; is_photo: number; sent_at: number }> = {};
+    if (conversations.length > 0) {
+      for (const conv of conversations) {
+        const lastMsg = await db
+          .prepare(
+            `SELECT content, sender, is_photo, sent_at
+             FROM messages
+             WHERE conversation_id = ? AND expired = 0
+             ORDER BY sent_at DESC LIMIT 1`
+          )
+          .bind(conv.id)
+          .first<any>();
+        if (lastMsg) {
+          lastMessagesMap[conv.id] = {
+            content: lastMsg.content,
+            sender: lastMsg.sender,
+            is_photo: lastMsg.is_photo,
+            sent_at: lastMsg.sent_at,
+          };
+        }
+      }
+    }
+
     const sock = this.clients.get(uLower);
     if (sock?.readyState === WebSocket.OPEN) {
       sock.send(
@@ -1335,6 +1359,7 @@ export class ChatRoom {
           discoverUsers,
           ignoredUsers: ignoredUserDetails,
           savedConversations: savedConvs,
+          lastMessages: lastMessagesMap,
           timers: timers.map((t) => ({
             conversation_id: t.conversation_id,
             timer_type: t.timer_type,

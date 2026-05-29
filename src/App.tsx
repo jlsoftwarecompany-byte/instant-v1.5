@@ -114,6 +114,7 @@ function MainApp() {
   const [usersMap, setUsersMap] = useState<Record<string, { nickname: string; links: number; linker_avatar?: string; linker_color?: string }>>({});
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [savedConversations, setSavedConversations] = useState<SavedConversation[]>([]);
+  const [lastMessages, setLastMessages] = useState<Record<number, { content: string; sender: string; is_photo: number; sent_at: number }>>({});
   const [timers, setTimers] = useState<TimerState[]>([]);
   const [discoverUsers, setDiscoverUsers] = useState<{ username: string; nickname: string; links: number; linker_avatar?: string; linker_color?: string }[]>([]);
 
@@ -240,6 +241,9 @@ function MainApp() {
           setDiscoverUsers(data.discoverUsers || []);
           if (data.savedConversations) {
             setSavedConversations(data.savedConversations);
+          }
+          if (data.lastMessages) {
+            setLastMessages(data.lastMessages);
           }
           if (data.ignoredUsers) {
             setIgnoredUsers(data.ignoredUsers);
@@ -442,6 +446,7 @@ function MainApp() {
           timersList={timers}
           discoverUsers={discoverUsers}
           savedConversations={savedConversations}
+          lastMessages={lastMessages}
           onStartNewConversation={(friend, convId) => {
             setActiveChatFriend(friend);
             setActiveConversationId(convId);
