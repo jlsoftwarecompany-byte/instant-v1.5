@@ -744,6 +744,26 @@ export class ChatRoom {
             `)
             .bind(authedUser, target, target, authedUser)
             .first<any>();
+        } else if (conv.archived && !conv.saved_permanently) {
+          // Conversation exploded but was not saved — wipe it clean for a fresh start.
+          // Cancel the pending 60s delete timer if still running.
+          const pending = this.saveWindowTimers.get(conv.id);
+          if (pending) {
+            clearTimeout(pending);
+            this.saveWindowTimers.delete(conv.id);
+          }
+          // Delete expired messages/timers and reset conversation state in one batch.
+          await db.batch([
+            db.prepare("DELETE FROM messages WHERE conversation_id = ?").bind(conv.id),
+            db.prepare("DELETE FROM timers WHERE conversation_id = ?").bind(conv.id),
+            db.prepare(`
+              UPDATE conversations
+              SET archived = 0, archived_at = NULL,
+                  phase = 'awaiting_response', opener_initiator = NULL, opener_timer_choice = NULL,
+                  started_at = CURRENT_TIMESTAMP, conversation_started = 0
+              WHERE id = ?
+            `).bind(conv.id),
+          ]);
         }
 
         ws.send(JSON.stringify({ type: "CONVERSATION_READY", conversationId: conv!.id }));

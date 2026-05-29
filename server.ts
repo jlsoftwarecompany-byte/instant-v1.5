@@ -976,6 +976,24 @@ wss.on("connection", (ws) => {
               WHERE (LOWER(participant_1) = ? AND LOWER(participant_2) = ?)
                  OR (LOWER(participant_1) = ? AND LOWER(participant_2) = ?)
             `).get(authenticatedUser, target, target, authenticatedUser) as any;
+          } else if (conv.archived && !conv.saved_permanently) {
+            // Conversation exploded but was not saved — wipe it clean for a fresh start.
+            // Cancel the pending 60s delete timer if still running.
+            const pending = saveWindowTimers.get(conv.id);
+            if (pending) {
+              clearTimeout(pending);
+              saveWindowTimers.delete(conv.id);
+            }
+            // Delete all expired messages and reset conversation state.
+            db.prepare("DELETE FROM messages WHERE conversation_id = ?").run(conv.id);
+            db.prepare("DELETE FROM timers WHERE conversation_id = ?").run(conv.id);
+            db.prepare(`
+              UPDATE conversations
+              SET archived = 0, archived_at = NULL,
+                  phase = 'awaiting_response', opener_initiator = NULL, opener_timer_choice = NULL,
+                  started_at = CURRENT_TIMESTAMP, conversation_started = 0
+              WHERE id = ?
+            `).run(conv.id);
           }
 
           ws.send(JSON.stringify({ type: "CONVERSATION_READY", conversationId: conv.id }));
