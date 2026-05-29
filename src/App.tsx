@@ -100,30 +100,6 @@ async function registerPushNotifications(username: string) {
   }
 }
 
-export const sendPushNotification = async (
-  username: string,
-  payload: {
-    type: string;
-    title: string;
-    body: string;
-    icon?: string;
-    data?: any;
-  }
-) => {
-  try {
-    await fetch("/api/send-push-notification", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        username,
-        ...payload
-      })
-    });
-  } catch (err) {
-    console.warn("Failed to send push notification:", err);
-  }
-};
-
 function MainApp() {
   const { theme } = useTheme();
 

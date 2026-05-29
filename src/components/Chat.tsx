@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { Message, TimerState, User } from "../types";
 import { wsService } from "../lib/ws";
 import { SnapNotificationItem } from "./SnapNotification";
-import { sendPushNotification } from "../App";
+import { triggerPushNotification } from "../lib/pushNotificationService";
 import {
   Send, ChevronLeft, Clock, ShieldAlert, Image as ImageIcon, Camera,
   Download, Sparkles, Check, Loader2, Star, RotateCcw, Archive, MessageCircle
@@ -133,7 +133,7 @@ export const Chat: React.FC<ChatProps> = ({
 
             // Push notification for opener received
             if (isOpener && data.message.receiver.toLowerCase() === currentUser.username.toLowerCase()) {
-              sendPushNotification(currentUser.username, {
+              triggerPushNotification(currentUser.username, {
                 type: "opener_received",
                 title: `New opener from ${contact.nickname}`,
                 body: `${contact.nickname} (@${contact.username}) sent you an instant message`,
@@ -147,7 +147,7 @@ export const Chat: React.FC<ChatProps> = ({
             }
             // Push notification for opener response
             else if (!isOpener && conversationPhase === "awaiting_response" && data.openerInitiator?.toLowerCase() === currentUser.username.toLowerCase()) {
-              sendPushNotification(currentUser.username, {
+              triggerPushNotification(currentUser.username, {
                 type: "opener_responded",
                 title: `${contact.nickname} responded!`,
                 body: `${contact.nickname} accepted your instant message`,
