@@ -12,6 +12,11 @@ interface MessageBubbleProps {
   contactAvatar: string;
   onClickPhoto: (src: string) => void;
   onExplodeComplete?: (messageId: number) => void;
+  // Hot potato: only the latest message runs/shows its countdown. Earlier
+  // messages are frozen (timer paused & hidden) until the chat detonates.
+  isLatest?: boolean;
+  // When true, the whole conversation is exploding — every bubble blows up.
+  forceExplode?: boolean;
 }
 
 export const MessageBubble: React.FC<MessageBubbleProps> = ({
@@ -22,6 +27,8 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   contactAvatar,
   onClickPhoto,
   onExplodeComplete,
+  isLatest = true,
+  forceExplode = false,
 }) => {
   const isMe = message.sender.toLowerCase() === currentUser.username;
   const isPhoto = message.is_photo === 1;
@@ -32,7 +39,9 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
 
   const [stage, setStage] = useState<"active" | "flash" | "exploding" | "expired">(() => {
     if (isSaved) return "active";
-    // Check if finished
+    // Hot potato: earlier (non-latest) messages stay frozen & visible; their own
+    // original timer is paused, so never auto-expire them on mount.
+    if (!isLatest) return "active";
     const isAlreadyExpired = Date.now() >= endTime;
     return isAlreadyExpired ? "expired" : "active";
   });
@@ -43,6 +52,22 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
 
   useEffect(() => {
     if (stage !== "active" || isSaved) return;
+
+    // Hot potato: a frozen (non-latest) bubble does NOT run its countdown — its
+    // timer is paused and hidden. Reset any in-progress color shift so it sits
+    // neutral while it waits, and bail out of the animation loop.
+    if (!isLatest || forceExplode) {
+      const el = bubbleRef.current;
+      if (el) {
+        el.style.backgroundColor = "";
+        if (!isMe) {
+          el.style.color = "";
+          el.style.borderColor = "";
+        }
+      }
+      setTimeRemaining(100);
+      return;
+    }
 
     let animId: number;
     const bubbleEl = bubbleRef.current;
@@ -144,7 +169,26 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
 
     animId = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(animId);
-  }, [stage, message, isMe, endTime, isSaved, onExplodeComplete]);
+  }, [stage, message, isMe, endTime, isSaved, onExplodeComplete, isLatest, forceExplode]);
+
+  // Hot potato detonation: when the chat explodes, every bubble blows up at once
+  // regardless of which one held the live timer.
+  useEffect(() => {
+    if (!forceExplode || isSaved) return;
+    if (explosionTriggered.current) return;
+    explosionTriggered.current = true;
+    setTimeRemaining(0);
+    setStage("flash");
+    const explodeTimeout = setTimeout(() => setStage("exploding"), 150);
+    const ashTimeout = setTimeout(() => {
+      setStage("expired");
+      if (onExplodeComplete) onExplodeComplete(message.id);
+    }, 600);
+    return () => {
+      clearTimeout(explodeTimeout);
+      clearTimeout(ashTimeout);
+    };
+  }, [forceExplode, isSaved, message.id, onExplodeComplete]);
 
   return (
     <motion.div
@@ -225,8 +269,8 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
           </motion.div>
         )}
 
-        {/* Countdown Progress Bar */}
-        {stage === "active" && !isSaved && (
+        {/* Countdown Progress Bar — only the latest message's timer is shown */}
+        {stage === "active" && !isSaved && isLatest && !forceExplode && (
           <div className="w-full mt-1.5 h-1 bg-zinc-200 dark:bg-zinc-800 rounded-full overflow-hidden">
             <motion.div
               className="h-full rounded-full transition-colors"

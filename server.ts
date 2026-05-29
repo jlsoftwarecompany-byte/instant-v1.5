@@ -928,12 +928,6 @@ wss.on("connection", (ws) => {
           let newInitiator = initiator;
           let newTimerChoice: number | null = conv.opener_timer_choice ?? null;
 
-          // Capture any running normal timer BEFORE clearing, so a normal reply
-          // can EXTEND it (cumulative timer) rather than replace it.
-          const prevNormal = db.prepare(
-            "SELECT started_at, duration_ms FROM timers WHERE conversation_id = ? AND timer_type = 'normal'"
-          ).get(convId) as any;
-
           db.prepare("DELETE FROM timers WHERE conversation_id = ?").run(convId);
 
           if (messageType === "opener") {
@@ -961,18 +955,13 @@ wss.on("connection", (ws) => {
             ).run(convId, new Date(sentAt).toISOString(), duration);
             newPhase = "active";
           } else {
-            // Normal message in an active chat → EXTEND the running timer.
-            // Keep the original started_at and add this message's duration so the
-            // absolute expiry simply pushes out (new_expiry = old_expiry + added).
-            let startIso = new Date(sentAt).toISOString();
-            let totalDuration = duration;
-            if (prevNormal) {
-              startIso = prevNormal.started_at;
-              totalDuration = prevNormal.duration_ms + duration;
-            }
+            // Normal message in an active chat → HOT POTATO. The new message
+            // REPLACES the running timer with a fresh one of its own duration.
+            // Only the latest message's timer counts down; respond before it
+            // expires or the whole chat is deleted.
             db.prepare(
               "INSERT INTO timers (conversation_id, timer_type, started_at, duration_ms) VALUES (?, 'normal', ?, ?)"
-            ).run(convId, startIso, totalDuration);
+            ).run(convId, new Date(sentAt).toISOString(), duration);
           }
 
           const senderUser = db.prepare("SELECT links FROM users WHERE LOWER(username) = ?").get(authenticatedUser) as any;

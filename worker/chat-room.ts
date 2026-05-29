@@ -799,13 +799,6 @@ export class ChatRoom {
         let newInitiator = initiator;
         let newTimerChoice: number | null = conv.opener_timer_choice ?? null;
 
-        // Capture any running normal timer BEFORE the batch clears it, so a
-        // normal reply can EXTEND it (cumulative timer) rather than replace it.
-        const prevNormal = await db
-          .prepare("SELECT started_at, duration_ms FROM timers WHERE conversation_id = ? AND timer_type = 'normal'")
-          .bind(convId)
-          .first<any>();
-
         const ops: D1PreparedStatement[] = [
           db.prepare("DELETE FROM timers WHERE conversation_id = ?").bind(convId),
         ];
@@ -835,18 +828,13 @@ export class ChatRoom {
           );
           newPhase = "active";
         } else {
-          // Normal message in an active chat → EXTEND the running timer: keep the
-          // original started_at and add this duration (new_expiry = old_expiry + added).
-          let startIso = new Date(sentAt).toISOString();
-          let totalDuration = duration;
-          if (prevNormal) {
-            startIso = prevNormal.started_at;
-            totalDuration = prevNormal.duration_ms + duration;
-          }
+          // Normal message in an active chat → HOT POTATO. The new message
+          // REPLACES the running timer with a fresh one of its own duration, so
+          // only the latest message's timer counts down. Miss it and the chat dies.
           ops.push(
             db
               .prepare("INSERT INTO timers (conversation_id, timer_type, started_at, duration_ms) VALUES (?, 'normal', ?, ?)")
-              .bind(convId, startIso, totalDuration)
+              .bind(convId, new Date(sentAt).toISOString(), duration)
           );
         }
 

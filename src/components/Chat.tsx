@@ -35,6 +35,9 @@ export const Chat: React.FC<ChatProps> = ({
   const [activeTimer, setActiveTimer] = useState<TimerState | null>(null);
   const [timeLeftMs, setTimeLeftMs] = useState<number>(0);
   const [timerPercentage, setTimerPercentage] = useState<number>(100);
+  // Hot potato: when the latest timer expires, every bubble explodes at once.
+  const [detonating, setDetonating] = useState<boolean>(false);
+  const detonatingRef = useRef<boolean>(false);
 
   // Save Status (needed for message bubble state management)
   const [saveStatus, setSaveStatus] = useState<"idle" | "request_sent" | "request_received" | "saved">(
@@ -105,39 +108,15 @@ export const Chat: React.FC<ChatProps> = ({
             setOpenerInitiator(data.openerInitiator ?? null);
             if (data.openerTimerChoice !== undefined) setOpenerTimerChoice(data.openerTimerChoice);
 
-            // Cumulative extension: in the active phase, each normal reply ADDS
-            // its duration to the running timer instead of replacing it. Openers
-            // and the first reply (opener response) start fresh so the long
-            // opener window is never carried into the active chat.
+            // Hot potato: each new message REPLACES the running timer with a
+            // fresh one of its own duration. Only the latest message's timer
+            // counts down — respond before it expires or the whole chat dies.
             const isOpener = data.message.message_type === "opener";
-            const added = data.message.timer_duration;
-            const contributor = {
-              username: data.message.sender,
-              added_at: data.message.sent_at,
-              duration_ms: added
-            };
-            setActiveTimer(prev => {
-              const canExtend = !!prev && prev.timer_type === "normal" && !isOpener;
-              if (!canExtend) {
-                return {
-                  conversation_id: conversationId,
-                  timer_type: isOpener ? "opener" : "normal",
-                  started_at: data.message.sent_at,
-                  duration_ms: added,
-                  cumulative_duration_ms: added,
-                  original_duration_ms: added,
-                  contributors: [contributor]
-                };
-              }
-              // Extend: keep started_at so the absolute expiry simply pushes out
-              // by `added` (new_expiry = old_expiry + added) — drift-free, and
-              // remaining = prevRemaining + added.
-              return {
-                ...prev,
-                duration_ms: prev.duration_ms + added,
-                cumulative_duration_ms: (prev.cumulative_duration_ms ?? prev.duration_ms) + added,
-                contributors: [...(prev.contributors ?? []), contributor]
-              };
+            setActiveTimer({
+              conversation_id: conversationId,
+              timer_type: isOpener ? "opener" : "normal",
+              started_at: data.message.sent_at,
+              duration_ms: data.message.timer_duration
             });
           }
           break;
@@ -145,13 +124,17 @@ export const Chat: React.FC<ChatProps> = ({
         case "CHAT_DELETED":
           if (data.conversationId === conversationId) {
             // A normal message went unanswered — the chat was permanently wiped.
-            setMessages([]);
+            // If we're mid-detonation, let the explosion animation finish and let
+            // the detonation effect handle the wipe; otherwise clear immediately.
             setActiveTimer(null);
             setConversationPhase("awaiting_response");
             setOpenerInitiator(null);
             setOpenerTimerChoice(null);
-            messageVisibilityRef.current.clear();
-            triggerToast("Chat expired — messages were permanently deleted");
+            if (!detonatingRef.current) {
+              setMessages([]);
+              messageVisibilityRef.current.clear();
+              triggerToast("Chat expired — messages were permanently deleted");
+            }
           }
           break;
 
@@ -229,19 +212,18 @@ export const Chat: React.FC<ChatProps> = ({
         setTimeLeftMs(0);
         setTimerPercentage(0);
         setActiveTimer(null);
-        // Promptly mark older messages as expired locally
-        setMessages(prev => prev.map(m => ({ ...m, expired: 1 })));
-        // A normal message that went unanswered wipes the whole chat. Ask the
-        // server to delete it (the server timer monitor is the authoritative
-        // fallback; this just makes deletion feel instant). Opener expiry only
-        // resets the opener and never deletes.
+        // Hot potato: the latest message's timer ran out unanswered, so the
+        // WHOLE conversation explodes. Detonate every bubble at once, then ask
+        // the server to delete the chat (the server timer monitor is the
+        // authoritative fallback; this just makes it feel instant). Opener
+        // expiry only resets the opener and never deletes.
         if (activeTimer.timer_type === "normal") {
-          const lastContributor = activeTimer.contributors?.at(-1)?.username;
-          if (lastContributor) {
-            const isMine = lastContributor.toLowerCase() === currentUser.username.toLowerCase();
-            triggerToast(isMine ? "Your timer ran out — chat expired." : `${lastContributor}'s timer ran out — chat expired.`);
-          }
+          detonatingRef.current = true;
+          setDetonating(true);
+          triggerToast("Time's up — the conversation exploded.");
           wsService.send({ type: "CHAT_EXPIRED_DELETE", conversationId });
+        } else {
+          setMessages(prev => prev.map(m => ({ ...m, expired: 1 })));
         }
         clearInterval(interval);
       } else {
@@ -253,6 +235,22 @@ export const Chat: React.FC<ChatProps> = ({
 
     return () => clearInterval(interval);
   }, [activeTimer]);
+
+  // Hot potato: once detonation starts, let every bubble play its explosion
+  // (~600ms) then wipe the conversation locally and reset to the opener phase.
+  useEffect(() => {
+    if (!detonating) return;
+    const t = setTimeout(() => {
+      setMessages([]);
+      messageVisibilityRef.current.clear();
+      setConversationPhase("awaiting_response");
+      setOpenerInitiator(null);
+      setOpenerTimerChoice(null);
+      detonatingRef.current = false;
+      setDetonating(false);
+    }, 800);
+    return () => clearTimeout(t);
+  }, [detonating]);
 
   // Auto scroll to bottom
   useEffect(() => {
@@ -508,6 +506,11 @@ export const Chat: React.FC<ChatProps> = ({
               saveStatus={saveStatus}
               contactAvatar={contactAvatar}
               onClickPhoto={setViewerPhoto}
+              // Hot potato: only the latest message runs/shows its countdown;
+              // earlier messages are frozen (timer paused & hidden). When the
+              // chat detonates, every bubble explodes at once.
+              isLatest={idx === messages.length - 1}
+              forceExplode={detonating}
               onExplodeComplete={(msgId) => {
                 setMessages(prev => prev.map(msg => msg.id === msgId ? { ...msg, expired: 1 } : msg));
               }}
@@ -516,25 +519,6 @@ export const Chat: React.FC<ChatProps> = ({
         )}
         <div ref={messagesEndRef} />
       </div>
-
-      {/* Cumulative timer extension — shows who's keeping the chat alive (active phase only) */}
-      {activeTimer && activeTimer.timer_type === "normal" && (activeTimer.contributors?.length ?? 0) >= 2 && (
-        <div className="px-4 py-3 border-t border-b theme-border bg-gradient-to-r from-cyan-500/5 to-purple-500/5 flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-zinc-500 overflow-x-auto">
-          <span className="shrink-0 text-cyan-400 animate-pulse">⚡</span>
-          <span className="shrink-0 text-zinc-600 dark:text-zinc-400">Timer extended by:</span>
-          <div className="flex flex-nowrap gap-2 items-center">
-            {activeTimer.contributors!.map((contrib) => (
-              <span
-                key={`${contrib.username}-${contrib.added_at}`}
-                className="shrink-0 px-2 py-0.5 bg-white/10 dark:bg-zinc-800/50 rounded border border-cyan-400/30 text-cyan-500 flex items-center gap-1"
-              >
-                <span>{contrib.username}</span>
-                <span className="text-[8px] font-bold text-zinc-400">+{Math.round(contrib.duration_ms / 1000)}s</span>
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
 
       {/* Initiator is locked out until their opener gets a response */}
       {saveStatus !== "saved" && isWaitingForResponse && (
