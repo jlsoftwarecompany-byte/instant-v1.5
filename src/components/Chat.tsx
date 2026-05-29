@@ -429,7 +429,7 @@ export const Chat: React.FC<ChatProps> = ({
   const contactColor = contact.linker_color || "pink";
 
   return (
-    <div className="flex flex-col h-screen bg-[var(--background)] font-sans relative overflow-hidden">
+    <div className="fixed inset-0 flex flex-col bg-[var(--background)] font-sans overflow-hidden">
       
       {/* Dynamic Toast banner feedback */}
       <AnimatePresence>

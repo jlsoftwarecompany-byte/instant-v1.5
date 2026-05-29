@@ -206,23 +206,11 @@ export const Inbox: React.FC<InboxProps> = ({
       </header>
 
       {/* Main Container contents */}
-      <main className="flex-1 w-full px-6 py-8 space-y-8">
+      <main className="flex-1 w-full flex flex-col">
 
-        {/* Active Conversations list section — moved to top, full width */}
-        <section className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-xs font-bold tracking-widest text-zinc-400 uppercase">
-              Active Conversations ({friendsList.length})
-            </h2>
-            <button
-              onClick={() => setShowAddFriendModal(true)}
-              className="text-xs font-black text-pink-500 flex items-center gap-1 hover:underline decoration-pink-500/40 cursor-pointer active:scale-95 transition-transform"
-            >
-              <Plus className="w-3.5 h-3.5 text-[#FE2C55]" /> Start Chat
-            </button>
-          </div>
-
-          <div className="rounded-3xl theme-card border divide-y theme-border overflow-hidden bg-[var(--card-bg)]">
+        {/* Active Conversations list — flush to header, full width */}
+        <section>
+          <div className="divide-y theme-border border-b">
             {friendsList.length === 0 ? (
               <div className="p-10 text-center flex flex-col items-center justify-center space-y-3">
                 <div className="p-3 bg-zinc-100 dark:bg-zinc-950/70 rounded-full text-zinc-400">
@@ -320,6 +308,9 @@ export const Inbox: React.FC<InboxProps> = ({
             )}
           </div>
         </section>
+
+        {/* Secondary sections — padded */}
+        <div className="px-6 space-y-8 py-6">
 
         {/* Incoming/Outgoing requests notifications list */}
         {incomingPending.length > 0 && (
@@ -454,6 +445,8 @@ export const Inbox: React.FC<InboxProps> = ({
             </div>
           </section>
         )}
+
+        </div>
 
       </main>
 
