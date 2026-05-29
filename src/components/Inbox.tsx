@@ -206,18 +206,118 @@ export const Inbox: React.FC<InboxProps> = ({
       </header>
 
       {/* Main Container contents */}
-      <main className="flex-1 max-w-2xl w-full mx-auto px-6 py-8 space-y-8">
-        
-        {/* Banner highlight about instant */}
-        <section className="p-4 bg-gradient-to-tr from-[#FE2C55]/10 via-[#a855f7]/5 to-transparent border border-[#FE2C55]/10 rounded-2xl flex items-center gap-3 shadow-md">
-          <div className="p-2.5 bg-gradient-to-tr from-[#FE2C55] to-[#a855f7] rounded-xl text-white shrink-0 shadow-lg shadow-pink-500/10">
-            <Sparkles className="w-5 h-5 animate-pulse" />
+      <main className="flex-1 w-full px-6 py-8 space-y-8">
+
+        {/* Active Conversations list section — moved to top, full width */}
+        <section className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-xs font-bold tracking-widest text-zinc-400 uppercase">
+              Active Conversations ({friendsList.length})
+            </h2>
+            <button
+              onClick={() => setShowAddFriendModal(true)}
+              className="text-xs font-black text-pink-500 flex items-center gap-1 hover:underline decoration-pink-500/40 cursor-pointer active:scale-95 transition-transform"
+            >
+              <Plus className="w-3.5 h-3.5 text-[#FE2C55]" /> Start Chat
+            </button>
           </div>
-          <div>
-            <h3 className="font-extrabold text-xs tracking-wider text-pink-500 uppercase flex items-center gap-1.5">
-              Interactive Messaging <span className="text-[10px] lowercase text-purple-400 font-normal">neon edition</span>
-            </h3>
-            <p className="text-xs theme-text-muted font-medium">Earn score links by opening conversations and replying before timers expire.</p>
+
+          <div className="rounded-3xl theme-card border divide-y theme-border overflow-hidden bg-[var(--card-bg)]">
+            {friendsList.length === 0 ? (
+              <div className="p-10 text-center flex flex-col items-center justify-center space-y-3">
+                <div className="p-3 bg-zinc-100 dark:bg-zinc-950/70 rounded-full text-zinc-400">
+                  <MessageCircle className="w-6 h-6 text-pink-500" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-sm theme-text-primary">Connect to Chat</h4>
+                  <p className="text-xs text-zinc-400 mt-1 max-w-[210px] mx-auto leading-relaxed">
+                    Click "Start Chat" or add a permanent `@username` to launch a new ephemeral messaging timeline.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <AnimatePresence>
+                {friendsList.map((friend, idx) => {
+                  const convId = findConversationId(friend.username);
+                  const hasTimer = convId ? getConversationTimerText(convId) : null;
+                  const conversation = activeConversations.find(c => c.id === convId);
+                  const isSaved = conversation?.saved === 1;
+
+                  // Two-phase opener status (Prompt 1)
+                  const phase = conversation?.phase || "awaiting_response";
+                  const openerInit = conversation?.opener_initiator
+                    ? String(conversation.opener_initiator).toLowerCase()
+                    : null;
+                  const iAmInitiator = !!openerInit && openerInit === currentUser.username;
+                  const showAwaiting = !isSaved && phase === "awaiting_response" && !!openerInit && iAmInitiator;
+                  const showRespond = !isSaved && phase === "awaiting_response" && !!openerInit && !iAmInitiator;
+
+                  return (
+                    <motion.div
+                      key={friend.username}
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, scale: 0.95 }}
+                      transition={{ type: "spring", stiffness: 450, damping: 28, delay: idx * 0.05 }}
+                      whileHover={{ scale: 1.01, x: 2, backgroundColor: theme === "black" ? "#140e2b" : "#fbf8ff" }}
+                      whileTap={{ scale: 0.995 }}
+                      onClick={() => convId && onOpenChat(friend, convId)}
+                      className="p-5 flex items-center justify-between cursor-pointer transition-colors"
+                    >
+                      <div className="flex items-center gap-3.5">
+                        <div className={`w-11 h-11 rounded-2xl flex items-center justify-center text-2xl border shrink-0 select-none
+                          ${(friend.linker_color || 'pink') === 'pink' ? 'bg-[#FE2C55]/10 border-[#FE2C55]/30 shadow-md' : ''}
+                          ${(friend.linker_color || 'pink') === 'cyan' ? 'bg-[#25F4EE]/10 border-[#25F4EE]/30 shadow-md' : ''}
+                          ${(friend.linker_color || 'pink') === 'purple' ? 'bg-[#a855f7]/10 border-[#a855f7]/30 shadow-md' : ''}
+                          ${(friend.linker_color || 'pink') === 'gold' ? 'bg-[#eab308]/10 border-[#eab308]/30 shadow-md' : ''}
+                          ${(friend.linker_color || 'pink') === 'green' ? 'bg-[#22c55e]/10 border-[#22c55e]/30 shadow-md' : ''}
+                          ${(friend.linker_color || 'pink') === 'blue' ? 'bg-[#3b82f6]/10 border-[#3b82f6]/30 shadow-md' : ''}
+                        `}>
+                          {friend.linker_avatar || "👾"}
+                        </div>
+
+                        <div className="text-left">
+                          <h3 className="font-extrabold text-sm theme-text-primary flex items-center gap-1.5 leading-none uppercase">
+                            {friend.nickname}
+                            {isSaved && (
+                              <span className="text-[8px] px-1.5 py-0.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 rounded-sm font-black tracking-wide uppercase">
+                                Saved
+                              </span>
+                            )}
+                          </h3>
+                          <div className="flex items-center gap-1.5 mt-1">
+                            <span className="text-xs text-zinc-400">@{friend.username}</span>
+                            <span className="text-[10px] font-black text-amber-500 bg-amber-500/10 px-1.5 py-0.2 rounded">
+                              ⭐ {friend.links}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-3">
+                        {showAwaiting && (
+                          <span className="px-2 py-0.5 text-[9px] font-black text-amber-500 bg-amber-500/5 border border-amber-500/20 rounded-md tracking-wider uppercase flex items-center gap-1">
+                            ⏳ Awaiting response
+                          </span>
+                        )}
+                        {showRespond && (
+                          <span className="px-2 py-0.5 text-[9px] font-black text-cyan-500 bg-[#25F4EE]/5 border border-[#25F4EE]/20 rounded-md tracking-wider uppercase flex items-center gap-1 animate-pulse">
+                            💬 Respond to start
+                          </span>
+                        )}
+                        {hasTimer && !isSaved && !showAwaiting && !showRespond && (
+                          <span className="px-2 py-0.5 text-[9px] font-black text-rose-500 bg-rose-500/5 border border-rose-500/15 rounded-md tracking-wider uppercase flex items-center gap-1 animate-pulse">
+                            <Clock className="w-2.5 h-2.5 shrink-0" />
+                            EXPIRY RUNNING
+                          </span>
+                        )}
+                        <ArrowRight className="w-4 h-4 text-zinc-300" />
+                      </div>
+                    </motion.div>
+                  );
+                })}
+              </AnimatePresence>
+            )}
           </div>
         </section>
 
@@ -354,119 +454,6 @@ export const Inbox: React.FC<InboxProps> = ({
             </div>
           </section>
         )}
-
-        {/* Active Conversations list section */}
-        <section className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-xs font-bold tracking-widest text-zinc-400 uppercase">
-              Active Conversations ({friendsList.length})
-            </h2>
-            <button
-              onClick={() => setShowAddFriendModal(true)}
-              className="text-xs font-black text-pink-500 flex items-center gap-1 hover:underline decoration-pink-500/40 cursor-pointer active:scale-95 transition-transform"
-            >
-              <Plus className="w-3.5 h-3.5 text-[#FE2C55]" /> Start Chat
-            </button>
-          </div>
-
-          <div className="rounded-3xl theme-card border divide-y theme-border overflow-hidden bg-[var(--card-bg)]">
-            {friendsList.length === 0 ? (
-              <div className="p-10 text-center flex flex-col items-center justify-center space-y-3">
-                <div className="p-3 bg-zinc-100 dark:bg-zinc-950/70 rounded-full text-zinc-400">
-                  <MessageCircle className="w-6 h-6 text-pink-500" />
-                </div>
-                <div>
-                  <h4 className="font-bold text-sm theme-text-primary">Connect to Chat</h4>
-                  <p className="text-xs text-zinc-400 mt-1 max-w-[210px] mx-auto leading-relaxed">
-                    Click "Start Chat" or add a permanent `@username` to launch a new ephemeral messaging timeline.
-                  </p>
-                </div>
-              </div>
-            ) : (
-              <AnimatePresence>
-                {friendsList.map((friend, idx) => {
-                  const convId = findConversationId(friend.username);
-                  const hasTimer = convId ? getConversationTimerText(convId) : null;
-                  const conversation = activeConversations.find(c => c.id === convId);
-                  const isSaved = conversation?.saved === 1;
-
-                  // Two-phase opener status (Prompt 1)
-                  const phase = conversation?.phase || "awaiting_response";
-                  const openerInit = conversation?.opener_initiator
-                    ? String(conversation.opener_initiator).toLowerCase()
-                    : null;
-                  const iAmInitiator = !!openerInit && openerInit === currentUser.username;
-                  const showAwaiting = !isSaved && phase === "awaiting_response" && !!openerInit && iAmInitiator;
-                  const showRespond = !isSaved && phase === "awaiting_response" && !!openerInit && !iAmInitiator;
-
-                  return (
-                    <motion.div
-                      key={friend.username}
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, scale: 0.95 }}
-                      transition={{ type: "spring", stiffness: 450, damping: 28, delay: idx * 0.05 }}
-                      whileHover={{ scale: 1.01, x: 2, backgroundColor: theme === "black" ? "#140e2b" : "#fbf8ff" }}
-                      whileTap={{ scale: 0.995 }}
-                      onClick={() => convId && onOpenChat(friend, convId)}
-                      className="p-5 flex items-center justify-between cursor-pointer transition-colors"
-                    >
-                      <div className="flex items-center gap-3.5">
-                        <div className={`w-11 h-11 rounded-2xl flex items-center justify-center text-2xl border shrink-0 select-none
-                          ${(friend.linker_color || 'pink') === 'pink' ? 'bg-[#FE2C55]/10 border-[#FE2C55]/30 shadow-md' : ''}
-                          ${(friend.linker_color || 'pink') === 'cyan' ? 'bg-[#25F4EE]/10 border-[#25F4EE]/30 shadow-md' : ''}
-                          ${(friend.linker_color || 'pink') === 'purple' ? 'bg-[#a855f7]/10 border-[#a855f7]/30 shadow-md' : ''}
-                          ${(friend.linker_color || 'pink') === 'gold' ? 'bg-[#eab308]/10 border-[#eab308]/30 shadow-md' : ''}
-                          ${(friend.linker_color || 'pink') === 'green' ? 'bg-[#22c55e]/10 border-[#22c55e]/30 shadow-md' : ''}
-                          ${(friend.linker_color || 'pink') === 'blue' ? 'bg-[#3b82f6]/10 border-[#3b82f6]/30 shadow-md' : ''}
-                        `}>
-                          {friend.linker_avatar || "👾"}
-                        </div>
-
-                        <div className="text-left">
-                          <h3 className="font-extrabold text-sm theme-text-primary flex items-center gap-1.5 leading-none uppercase">
-                            {friend.nickname}
-                            {isSaved && (
-                              <span className="text-[8px] px-1.5 py-0.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 rounded-sm font-black tracking-wide uppercase">
-                                Saved
-                              </span>
-                            )}
-                          </h3>
-                          <div className="flex items-center gap-1.5 mt-1">
-                            <span className="text-xs text-zinc-400">@{friend.username}</span>
-                            <span className="text-[10px] font-black text-amber-500 bg-amber-500/10 px-1.5 py-0.2 rounded">
-                              ⭐ {friend.links}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-3">
-                        {showAwaiting && (
-                          <span className="px-2 py-0.5 text-[9px] font-black text-amber-500 bg-amber-500/5 border border-amber-500/20 rounded-md tracking-wider uppercase flex items-center gap-1">
-                            ⏳ Awaiting response
-                          </span>
-                        )}
-                        {showRespond && (
-                          <span className="px-2 py-0.5 text-[9px] font-black text-cyan-500 bg-[#25F4EE]/5 border border-[#25F4EE]/20 rounded-md tracking-wider uppercase flex items-center gap-1 animate-pulse">
-                            💬 Respond to start
-                          </span>
-                        )}
-                        {hasTimer && !isSaved && !showAwaiting && !showRespond && (
-                          <span className="px-2 py-0.5 text-[9px] font-black text-rose-500 bg-rose-500/5 border border-rose-500/15 rounded-md tracking-wider uppercase flex items-center gap-1 animate-pulse">
-                            <Clock className="w-2.5 h-2.5 shrink-0" />
-                            EXPIRY RUNNING
-                          </span>
-                        )}
-                        <ArrowRight className="w-4 h-4 text-zinc-300" />
-                      </div>
-                    </motion.div>
-                  );
-                })}
-              </AnimatePresence>
-            )}
-          </div>
-        </section>
 
       </main>
 
