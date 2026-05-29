@@ -119,6 +119,13 @@ try {
 try {
   db.exec("ALTER TABLE conversations ADD COLUMN opener_timer_choice INTEGER");
 } catch (e) {}
+// v1.7 — Archive & Revival
+try {
+  db.exec("ALTER TABLE conversations ADD COLUMN archived INTEGER DEFAULT 0");
+} catch (e) {}
+try {
+  db.exec("ALTER TABLE conversations ADD COLUMN archived_at INTEGER");
+} catch (e) {}
 
 // Web Push setup
 let vapidPublic = process.env.VAPID_PUBLIC_KEY || "";
@@ -337,18 +344,18 @@ function openerReward(durationMs: number): number {
   return OPENER_DURATIONS[durationMs] ?? 1;
 }
 
-// Permanently wipe a chat: drop every message + timer and reset the conversation
-// back to the opener phase so either participant may start a fresh opener.
-// Broadcasts CHAT_DELETED to both participants. Idempotent.
-function deleteChat(convId: number) {
+// Archive a chat on explosion: wipe messages + timers, mark archived=1 so it can be revived.
+// Broadcasts CHAT_DELETED (triggers explosion animation on clients). Idempotent.
+function archiveChat(convId: number) {
   const convRow = db.prepare("SELECT * FROM conversations WHERE id = ?").get(convId) as any;
   if (!convRow) return;
 
+  const now = Date.now();
   db.prepare("DELETE FROM messages WHERE conversation_id = ?").run(convId);
   db.prepare("DELETE FROM timers WHERE conversation_id = ?").run(convId);
   db.prepare(
-    "UPDATE conversations SET phase = 'awaiting_response', opener_initiator = NULL, opener_timer_choice = NULL WHERE id = ?"
-  ).run(convId);
+    "UPDATE conversations SET archived = 1, archived_at = ?, phase = 'awaiting_response', opener_initiator = NULL, opener_timer_choice = NULL WHERE id = ?"
+  ).run(now, convId);
 
   const payload = JSON.stringify({ type: "CHAT_DELETED", conversationId: convId });
   for (const username of [convRow.participant_1, convRow.participant_2]) {
@@ -1089,7 +1096,40 @@ wss.on("connection", (ws) => {
             convRow.participant_2.toLowerCase() === authenticatedUser;
           if (!isParticipant || convRow.saved === 1 || convRow.phase !== "active") return;
 
-          deleteChat(convId);
+          archiveChat(convId);
+          break;
+        }
+
+        case "REVIVE_CONVERSATION": {
+          if (!authenticatedUser) return;
+          const convId = parseInt(data.conversationId, 10);
+          if (isNaN(convId)) return;
+
+          const convRow = db.prepare("SELECT * FROM conversations WHERE id = ?").get(convId) as any;
+          if (!convRow) { ws.send(JSON.stringify({ type: "REVIVE_FAILED", reason: "Conversation not found" })); return; }
+
+          const isParticipant =
+            convRow.participant_1.toLowerCase() === authenticatedUser ||
+            convRow.participant_2.toLowerCase() === authenticatedUser;
+          if (!isParticipant) { ws.send(JSON.stringify({ type: "REVIVE_FAILED", reason: "Unauthorized" })); return; }
+          if (!convRow.archived) { ws.send(JSON.stringify({ type: "REVIVE_FAILED", reason: "Conversation is not archived" })); return; }
+
+          const REVIVE_COST = 3;
+          const userRow = db.prepare("SELECT links FROM users WHERE LOWER(username) = ?").get(authenticatedUser) as any;
+          if (!userRow || userRow.links < REVIVE_COST) {
+            ws.send(JSON.stringify({ type: "REVIVE_FAILED", reason: `Not enough links — need ${REVIVE_COST}` }));
+            return;
+          }
+
+          db.prepare("UPDATE users SET links = links - ? WHERE LOWER(username) = ?").run(REVIVE_COST, authenticatedUser);
+          db.prepare(
+            "UPDATE conversations SET archived = 0, archived_at = NULL, phase = 'awaiting_response', opener_initiator = NULL, opener_timer_choice = NULL WHERE id = ?"
+          ).run(convId);
+
+          const newLinks = (db.prepare("SELECT links FROM users WHERE LOWER(username) = ?").get(authenticatedUser) as any).links;
+          ws.send(JSON.stringify({ type: "REVIVE_SUCCESS", conversationId: convId, links: newLinks }));
+          syncUserFullData(convRow.participant_1);
+          syncUserFullData(convRow.participant_2);
           break;
         }
 
@@ -1221,7 +1261,7 @@ const timerMonitorInterval = setInterval(() => {
     if (remainingMs <= 0) {
       if (timer.timer_type === "normal") {
         // A normal message went unanswered → the entire chat is permanently deleted.
-        deleteChat(convId);
+        archiveChat(convId);
       } else {
         // An opener went unanswered → expire it and reset to the opener phase so
         // either participant may try a fresh opener. The chat is NOT deleted.

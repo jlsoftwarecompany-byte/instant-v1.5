@@ -965,7 +965,45 @@ export class ChatRoom {
           convRow.participant_2.toLowerCase() === authedUser;
         if (!isParticipant || convRow.saved === 1 || convRow.phase !== "active") return;
 
-        await this.deleteChat(convId);
+        await this.archiveChat(convId);
+        break;
+      }
+
+      // ── Revive an archived conversation (costs 3 links) ───────────────────
+      case "REVIVE_CONVERSATION": {
+        if (!authedUser) return;
+        const convId = parseInt(data.conversationId, 10);
+        if (isNaN(convId)) return;
+
+        const convRow = await db.prepare("SELECT * FROM conversations WHERE id = ?").bind(convId).first<any>();
+        if (!convRow) { ws.send(JSON.stringify({ type: "REVIVE_FAILED", reason: "Conversation not found" })); return; }
+
+        const isParticipant =
+          convRow.participant_1.toLowerCase() === authedUser ||
+          convRow.participant_2.toLowerCase() === authedUser;
+        if (!isParticipant) { ws.send(JSON.stringify({ type: "REVIVE_FAILED", reason: "Unauthorized" })); return; }
+        if (!convRow.archived) { ws.send(JSON.stringify({ type: "REVIVE_FAILED", reason: "Conversation is not archived" })); return; }
+
+        const REVIVE_COST = 3;
+        const userRow = await db.prepare("SELECT links FROM users WHERE LOWER(username) = ?").bind(authedUser).first<any>();
+        if (!userRow || userRow.links < REVIVE_COST) {
+          ws.send(JSON.stringify({ type: "REVIVE_FAILED", reason: `Not enough links — need ${REVIVE_COST}` }));
+          return;
+        }
+
+        await db.batch([
+          db.prepare("UPDATE users SET links = links - ? WHERE LOWER(username) = ?").bind(REVIVE_COST, authedUser),
+          db.prepare(
+            "UPDATE conversations SET archived = 0, archived_at = NULL, phase = 'awaiting_response', opener_initiator = NULL, opener_timer_choice = NULL WHERE id = ?"
+          ).bind(convId),
+        ]);
+
+        const updatedUser = await db.prepare("SELECT links FROM users WHERE LOWER(username) = ?").bind(authedUser).first<any>();
+        ws.send(JSON.stringify({ type: "REVIVE_SUCCESS", conversationId: convId, links: updatedUser?.links ?? 0 }));
+        await Promise.all([
+          this.syncUser(convRow.participant_1),
+          this.syncUser(convRow.participant_2),
+        ]);
         break;
       }
 
@@ -1186,9 +1224,9 @@ export class ChatRoom {
     }
   }
 
-  // Permanently wipe a chat: drop every message + timer and reset the conversation
-  // back to the opener phase. Broadcasts CHAT_DELETED to both participants. Idempotent.
-  private async deleteChat(convId: number): Promise<void> {
+  // Archive a chat on explosion: wipe messages + timers, mark archived=1 so it can be revived.
+  // Broadcasts CHAT_DELETED (triggers explosion animation on clients). Idempotent.
+  private async archiveChat(convId: number): Promise<void> {
     const db = this.env.DB;
     const convRow = await db
       .prepare("SELECT * FROM conversations WHERE id = ?")
@@ -1196,12 +1234,13 @@ export class ChatRoom {
       .first<any>();
     if (!convRow) return;
 
+    const now = Date.now();
     await db.batch([
       db.prepare("DELETE FROM messages WHERE conversation_id = ?").bind(convId),
       db.prepare("DELETE FROM timers WHERE conversation_id = ?").bind(convId),
       db
-        .prepare("UPDATE conversations SET phase = 'awaiting_response', opener_initiator = NULL, opener_timer_choice = NULL WHERE id = ?")
-        .bind(convId),
+        .prepare("UPDATE conversations SET archived = 1, archived_at = ?, phase = 'awaiting_response', opener_initiator = NULL, opener_timer_choice = NULL WHERE id = ?")
+        .bind(now, convId),
     ]);
 
     const payload = JSON.stringify({ type: "CHAT_DELETED", conversationId: convId });
@@ -1237,7 +1276,7 @@ export class ChatRoom {
       if (remainingMs <= 0) {
         if (timer.timer_type === "normal") {
           // A normal message went unanswered → the entire chat is permanently deleted.
-          await this.deleteChat(convId);
+          await this.archiveChat(convId);
         } else {
           // An opener went unanswered → expire it and reset to the opener phase so
           // either participant may try a fresh opener. The chat is NOT deleted.

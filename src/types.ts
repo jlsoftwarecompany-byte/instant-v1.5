@@ -34,6 +34,9 @@ export interface Conversation {
   privacy_mode?: 'standard' | 'ephemeral' | 'anonymous' | 'incognito';
   disappear_after_seconds?: number | null;
   anonymous_mode?: number; // 0 or 1
+  // v1.7 — Archive & Revival
+  archived?: number; // 0 or 1
+  archived_at?: number | null;
 }
 
 export interface Timer {

@@ -242,6 +242,21 @@ function MainApp() {
           }
           break;
 
+        case "REVIVE_SUCCESS":
+          // Update user's link count after spending links on revival
+          if (currentUser && typeof data.links === "number") {
+            setCurrentUser(prev => prev ? { ...prev, links: data.links } : null);
+            const stored = localStorage.getItem("instant-user");
+            if (stored) {
+              try {
+                const parsed = JSON.parse(stored);
+                parsed.links = data.links;
+                localStorage.setItem("instant-user", JSON.stringify(parsed));
+              } catch (e) {}
+            }
+          }
+          break;
+
         case "NICKNAME_UPDATED":
           // Change nickname locally if matches target
           setUsersMap(prev => {
