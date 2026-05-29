@@ -126,6 +126,10 @@ try {
 try {
   db.exec("ALTER TABLE conversations ADD COLUMN archived_at INTEGER");
 } catch (e) {}
+// v1.8 — Link reward message cap (combined messages per conversation)
+try {
+  db.exec("ALTER TABLE conversations ADD COLUMN message_count INTEGER DEFAULT 0");
+} catch (e) {}
 
 // Web Push setup
 let vapidPublic = process.env.VAPID_PUBLIC_KEY || "";
@@ -334,9 +338,9 @@ function syncUserFullData(username: string) {
 // ─── Two-phase opener/normal economy (Prompt 1) ─────────────────────────────
 // Opener timers and their fixed link reward on a successful response.
 const OPENER_DURATIONS: Record<number, number> = {
-  600000: 3,    // 10 minutes  → 3 links
-  3600000: 2,   // 1 hour      → 2 links
-  43200000: 1,  // 12 hours    → 1 link
+  600000: 10,   // 10 minutes  → 10 links
+  3600000: 5,   // 1 hour      →  5 links
+  43200000: 1,  // 12 hours    →  1 link
 };
 const NORMAL_DURATIONS = new Set([10000, 60000, 300000]); // 10s / 60s / 5m
 
@@ -938,6 +942,9 @@ wss.on("connection", (ws) => {
 
           db.prepare("DELETE FROM timers WHERE conversation_id = ?").run(convId);
 
+          // Always increment the combined message count for the 10-message reward cap.
+          db.prepare("UPDATE conversations SET message_count = message_count + 1 WHERE id = ?").run(convId);
+
           if (messageType === "opener") {
             // Register the opener and start its (long) timer.
             db.prepare(
@@ -950,10 +957,8 @@ wss.on("connection", (ws) => {
             newInitiator = authenticatedUser;
             newTimerChoice = duration;
           } else if (isOpenerResponse) {
-            // Successful opener response → fixed reward to both, flip to active.
-            earnedLinks = openerReward(conv.opener_timer_choice ?? 0);
-            db.prepare("UPDATE users SET links = links + ? WHERE LOWER(username) = ?").run(earnedLinks, authenticatedUser);
-            db.prepare("UPDATE users SET links = links + ? WHERE LOWER(username) = ?").run(earnedLinks, target);
+            // Successful opener response → flip to active. Links are awarded below,
+            // gated on the 10-message cap.
             db.prepare(
               "UPDATE messages SET is_responded_to = 1 WHERE conversation_id = ? AND message_type = 'opener' AND is_responded_to = 0"
             ).run(convId);
@@ -970,6 +975,18 @@ wss.on("connection", (ws) => {
             db.prepare(
               "INSERT INTO timers (conversation_id, timer_type, started_at, duration_ms) VALUES (?, 'normal', ?, ?)"
             ).run(convId, new Date(sentAt).toISOString(), duration);
+          }
+
+          // Read fresh message_count to apply the 10-message reward cap.
+          const convAfter = db.prepare("SELECT message_count FROM conversations WHERE id = ?").get(convId) as any;
+          const currentMessageCount = convAfter?.message_count ?? 0;
+
+          // Award links only on a successful opener response AND only while the
+          // combined message count is ≤ 10. From the 11th message on, nobody earns.
+          if (isOpenerResponse && currentMessageCount <= 10) {
+            earnedLinks = openerReward(conv.opener_timer_choice ?? 0);
+            db.prepare("UPDATE users SET links = links + ? WHERE LOWER(username) = ?").run(earnedLinks, authenticatedUser);
+            db.prepare("UPDATE users SET links = links + ? WHERE LOWER(username) = ?").run(earnedLinks, target);
           }
 
           const senderUser = db.prepare("SELECT links FROM users WHERE LOWER(username) = ?").get(authenticatedUser) as any;

@@ -617,7 +617,7 @@ export const Chat: React.FC<ChatProps> = ({
             </div>
             <p className="text-xs text-zinc-400 font-sans leading-relaxed">
               {isOpenerTurn
-                ? "Send an opener with a 10m, 1hr or 12hr timer. When they reply, you both earn links."
+                ? "Send an opener with a 10m (+10⭐), 1hr (+5⭐) or 12hr (+1⭐) timer. When they reply, you both earn links — up to 10 messages per conversation."
                 : "No messages yet."}
             </p>
           </div>
@@ -688,7 +688,7 @@ export const Chat: React.FC<ChatProps> = ({
           {conversationPhase === "awaiting_response" && !isOpenerTurn && (
             <div className="mb-3 px-3 py-2 rounded-xl border border-[#25F4EE]/20 bg-[#25F4EE]/5 text-[11px] font-bold text-cyan-500 flex items-center gap-1.5">
               <Sparkles className="w-3.5 h-3.5 shrink-0" />
-              Reply to start the chat — you both earn {openerTimerChoice ? (openerTimerChoice === 600000 ? 3 : openerTimerChoice === 3600000 ? 2 : 1) : 1} link{(openerTimerChoice === 600000 ? 3 : openerTimerChoice === 3600000 ? 2 : 1) === 1 ? "" : "s"}.
+              Reply to start the chat — you both earn {openerTimerChoice === 600000 ? 10 : openerTimerChoice === 3600000 ? 5 : 1} link{(openerTimerChoice === 600000 ? 10 : openerTimerChoice === 3600000 ? 5 : 1) === 1 ? "" : "s"}.
             </div>
           )}
 
@@ -746,8 +746,8 @@ export const Chat: React.FC<ChatProps> = ({
             <div className={`grid gap-2 ${isOpenerTurn ? "grid-cols-3" : "grid-cols-3"}`}>
               {(isOpenerTurn
                 ? [
-                    { label: "10m · +3", val: 600000 },
-                    { label: "1hr · +2", val: 3600000 },
+                    { label: "10m · +10", val: 600000 },
+                    { label: "1hr · +5",  val: 3600000 },
                     { label: "12hr · +1", val: 43200000 }
                   ]
                 : [

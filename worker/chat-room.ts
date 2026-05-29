@@ -80,9 +80,9 @@ const REFRESH_TTL_SEC = 60 * 60 * 24 * 30;
 // ── Two-phase opener/normal economy (Prompt 1) ──────────────────────────────
 // Opener timers and their fixed link reward on a successful response.
 const OPENER_DURATIONS: Record<number, number> = {
-  600000: 3,    // 10 minutes  → 3 links
-  3600000: 2,   // 1 hour      → 2 links
-  43200000: 1,  // 12 hours    → 1 link
+  600000: 10,   // 10 minutes  → 10 links
+  3600000: 5,   // 1 hour      →  5 links
+  43200000: 1,  // 12 hours    →  1 link
 };
 const NORMAL_DURATIONS = new Set([10000, 60000, 300000]); // 10s / 60s / 5m
 
@@ -801,6 +801,8 @@ export class ChatRoom {
 
         const ops: D1PreparedStatement[] = [
           db.prepare("DELETE FROM timers WHERE conversation_id = ?").bind(convId),
+          // Always increment the combined message count for the 10-message reward cap
+          db.prepare("UPDATE conversations SET message_count = message_count + 1 WHERE id = ?").bind(convId),
         ];
 
         if (messageType === "opener") {
@@ -816,10 +818,8 @@ export class ChatRoom {
           newInitiator = authedUser;
           newTimerChoice = duration;
         } else if (isOpenerResponse) {
-          earnedLinks = openerReward(conv.opener_timer_choice ?? 0);
+          // Links are awarded AFTER the batch, gated on the 10-message cap.
           ops.push(
-            db.prepare("UPDATE users SET links = links + ? WHERE LOWER(username) = ?").bind(earnedLinks, authedUser),
-            db.prepare("UPDATE users SET links = links + ? WHERE LOWER(username) = ?").bind(earnedLinks, target),
             db.prepare("UPDATE messages SET is_responded_to = 1 WHERE conversation_id = ? AND message_type = 'opener' AND is_responded_to = 0").bind(convId),
             db.prepare("UPDATE conversations SET phase = 'active' WHERE id = ?").bind(convId),
             db
@@ -839,6 +839,23 @@ export class ChatRoom {
         }
 
         await db.batch(ops);
+
+        // Read fresh message_count AFTER the batch to apply the 10-message reward cap.
+        const convAfter = await db
+          .prepare("SELECT message_count FROM conversations WHERE id = ?")
+          .bind(convId)
+          .first<{ message_count: number }>();
+        const currentMessageCount = convAfter?.message_count ?? 0;
+
+        // Award links only on a successful opener response AND only while the
+        // combined message count is ≤ 10. From the 11th message on, nobody earns.
+        if (isOpenerResponse && currentMessageCount <= 10) {
+          earnedLinks = openerReward(conv.opener_timer_choice ?? 0);
+          await db.batch([
+            db.prepare("UPDATE users SET links = links + ? WHERE LOWER(username) = ?").bind(earnedLinks, authedUser),
+            db.prepare("UPDATE users SET links = links + ? WHERE LOWER(username) = ?").bind(earnedLinks, target),
+          ]);
+        }
 
         const [senderUser, targetUser] = await Promise.all([
           db.prepare("SELECT links FROM users WHERE LOWER(username) = ?").bind(authedUser).first<any>(),
