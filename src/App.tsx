@@ -328,30 +328,6 @@ function MainApp() {
 
   return (
     <div className="min-h-screen bg-[var(--background)] transition-colors duration-200">
-      
-      {/* Top Banner Online status checking row */}
-      {currentUser && (
-        <div className="w-full bg-zinc-950 text-white text-[10px] uppercase font-extrabold tracking-wider px-6 py-1 flex items-center justify-between border-b border-zinc-900 sticky top-0 z-50">
-          <div className="flex items-center gap-1">
-            <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-ping" />
-            <span>INSTANT PWA</span>
-          </div>
-
-          <div className="flex items-center gap-1.5 font-bold">
-            {isConnected ? (
-              <>
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-                <span className="text-emerald-500 font-sans">Server Connected</span>
-              </>
-            ) : (
-              <>
-                <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse shrink-0" />
-                <span className="text-rose-500 font-sans">Reconnecting...</span>
-              </>
-            )}
-          </div>
-        </div>
-      )}
 
       {/* Burst Reward Animation Overlay */}
       <AnimatePresence>

@@ -77,6 +77,19 @@ export function verifyJWT(
 const ACCESS_TTL_SEC = 60 * 60;
 const REFRESH_TTL_SEC = 60 * 60 * 24 * 30;
 
+// ── Two-phase opener/normal economy (Prompt 1) ──────────────────────────────
+// Opener timers and their fixed link reward on a successful response.
+const OPENER_DURATIONS: Record<number, number> = {
+  600000: 3,    // 10 minutes  → 3 links
+  3600000: 2,   // 1 hour      → 2 links
+  43200000: 1,  // 12 hours    → 1 link
+};
+const NORMAL_DURATIONS = new Set([10000, 60000, 300000]); // 10s / 60s / 5m
+
+function openerReward(durationMs: number): number {
+  return OPENER_DURATIONS[durationMs] ?? 1;
+}
+
 async function issueTokens(
   username: string,
   db: D1Database,
@@ -722,7 +735,7 @@ export class ChatRoom {
 
         const conv = await db
           .prepare(
-            `SELECT id FROM conversations
+            `SELECT * FROM conversations
              WHERE (LOWER(participant_1) = ? AND LOWER(participant_2) = ?)
                 OR (LOWER(participant_1) = ? AND LOWER(participant_2) = ?)`
           )
@@ -735,13 +748,35 @@ export class ChatRoom {
         }
 
         const convId = conv.id;
+        const phase: string = conv.phase || "awaiting_response";
+        const initiator: string | null = conv.opener_initiator ? conv.opener_initiator.toLowerCase() : null;
+
+        // Decide the message kind from the current phase (see server.ts for the
+        // full state machine).
+        let messageType: "opener" | "normal" = "normal";
+        let isOpenerResponse = false;
+
+        if (phase === "awaiting_response") {
+          if (!initiator) {
+            messageType = "opener";
+          } else if (initiator === authedUser) {
+            ws.send(JSON.stringify({ type: "ERROR", message: "Wait for a response before sending another opener." }));
+            return;
+          } else {
+            isOpenerResponse = true;
+          }
+        }
+
+        const duration = messageType === "opener"
+          ? (OPENER_DURATIONS[timerDuration] ? timerDuration : 600000)
+          : (NORMAL_DURATIONS.has(timerDuration) ? timerDuration : 60000);
 
         const msgResult = await db
           .prepare(
-            `INSERT INTO messages (conversation_id, sender, receiver, content, sent_at, timer_duration, expired, is_photo)
-             VALUES (?, ?, ?, ?, ?, ?, 0, ?)`
+            `INSERT INTO messages (conversation_id, sender, receiver, content, sent_at, timer_duration, expired, is_photo, message_type, is_responded_to)
+             VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, 0)`
           )
-          .bind(convId, authedUser, target, content || "", sentAt, timerDuration, isPhoto ? 1 : 0)
+          .bind(convId, authedUser, target, content || "", sentAt, duration, isPhoto ? 1 : 0, messageType)
           .run();
 
         const savedMsg = {
@@ -751,48 +786,69 @@ export class ChatRoom {
           receiver: target,
           content: content || "",
           sent_at: sentAt,
-          timer_duration: timerDuration,
+          timer_duration: duration,
           expired: 0,
           is_photo: isPhoto ? 1 : 0,
+          seen: false,
+          message_type: messageType,
+          is_responded_to: 0,
         };
 
-        const activeTimer = await db
-          .prepare("SELECT * FROM timers WHERE conversation_id = ?")
-          .bind(convId)
-          .first<any>();
-
         let earnedLinks = 0;
-        if (activeTimer) {
-          const isInTime =
-            sentAt - new Date(activeTimer.started_at).getTime() <= activeTimer.duration_ms;
-          if (isInTime && activeTimer.timer_type === "opener" && target === authedUser) {
-            const countRow = await db
-              .prepare("SELECT COUNT(*) as count FROM messages WHERE conversation_id = ?")
-              .bind(convId)
-              .first<any>();
-            const msgCount = countRow?.count || 1;
-            earnedLinks = Math.max(1, Math.ceil(Math.log(msgCount) / Math.log(1.2)));
-            await db.batch([
-              db.prepare("UPDATE users SET links = links + ? WHERE LOWER(username) = ?").bind(earnedLinks, authedUser),
-              db.prepare("UPDATE users SET links = links + ? WHERE LOWER(username) = ?").bind(earnedLinks, target),
-              db.prepare("DELETE FROM timers WHERE id = ?").bind(activeTimer.id),
-            ]);
-          }
+        let newPhase = phase;
+        let newInitiator = initiator;
+        let newTimerChoice: number | null = conv.opener_timer_choice ?? null;
+
+        const ops: D1PreparedStatement[] = [
+          db.prepare("DELETE FROM timers WHERE conversation_id = ?").bind(convId),
+        ];
+
+        if (messageType === "opener") {
+          ops.push(
+            db
+              .prepare("UPDATE conversations SET phase = 'awaiting_response', opener_initiator = ?, opener_timer_choice = ? WHERE id = ?")
+              .bind(authedUser, duration, convId),
+            db
+              .prepare("INSERT INTO timers (conversation_id, timer_type, started_at, duration_ms) VALUES (?, 'opener', ?, ?)")
+              .bind(convId, new Date(sentAt).toISOString(), duration)
+          );
+          newPhase = "awaiting_response";
+          newInitiator = authedUser;
+          newTimerChoice = duration;
+        } else if (isOpenerResponse) {
+          earnedLinks = openerReward(conv.opener_timer_choice ?? 0);
+          ops.push(
+            db.prepare("UPDATE users SET links = links + ? WHERE LOWER(username) = ?").bind(earnedLinks, authedUser),
+            db.prepare("UPDATE users SET links = links + ? WHERE LOWER(username) = ?").bind(earnedLinks, target),
+            db.prepare("UPDATE messages SET is_responded_to = 1 WHERE conversation_id = ? AND message_type = 'opener' AND is_responded_to = 0").bind(convId),
+            db.prepare("UPDATE conversations SET phase = 'active' WHERE id = ?").bind(convId),
+            db
+              .prepare("INSERT INTO timers (conversation_id, timer_type, started_at, duration_ms) VALUES (?, 'normal', ?, ?)")
+              .bind(convId, new Date(sentAt).toISOString(), duration)
+          );
+          newPhase = "active";
+        } else {
+          ops.push(
+            db
+              .prepare("INSERT INTO timers (conversation_id, timer_type, started_at, duration_ms) VALUES (?, 'normal', ?, ?)")
+              .bind(convId, new Date(sentAt).toISOString(), duration)
+          );
         }
 
-        await db.batch([
-          db.prepare("DELETE FROM timers WHERE conversation_id = ?").bind(convId),
-          db
-            .prepare("INSERT INTO timers (conversation_id, timer_type, started_at, duration_ms) VALUES (?, 'opener', ?, ?)")
-            .bind(convId, new Date(sentAt).toISOString(), timerDuration),
-        ]);
+        await db.batch(ops);
 
         const [senderUser, targetUser] = await Promise.all([
           db.prepare("SELECT links FROM users WHERE LOWER(username) = ?").bind(authedUser).first<any>(),
           db.prepare("SELECT links FROM users WHERE LOWER(username) = ?").bind(target).first<any>(),
         ]);
 
-        const broadcast = JSON.stringify({ type: "CHAT_MESSAGE_BROADCAST", message: savedMsg });
+        const broadcast = JSON.stringify({
+          type: "CHAT_MESSAGE_BROADCAST",
+          message: savedMsg,
+          phase: newPhase,
+          openerInitiator: newInitiator,
+          openerTimerChoice: newTimerChoice,
+        });
         const targetWs = this.clients.get(target);
 
         if (ws.readyState === WebSocket.OPEN) {
@@ -830,10 +886,17 @@ export class ChatRoom {
           .prepare("SELECT * FROM messages WHERE conversation_id = ? ORDER BY sent_at ASC")
           .bind(convId)
           .all<any>();
+        const histConv = await db
+          .prepare("SELECT phase, opener_initiator, opener_timer_choice FROM conversations WHERE id = ?")
+          .bind(convId)
+          .first<any>();
         ws.send(
           JSON.stringify({
             type: "HISTORY_SYNC",
             conversationId: convId,
+            phase: histConv?.phase || "awaiting_response",
+            openerInitiator: histConv?.opener_initiator ? histConv.opener_initiator.toLowerCase() : null,
+            openerTimerChoice: histConv?.opener_timer_choice ?? null,
             messages: msgs.map((m) => ({
               id: m.id,
               conversation_id: m.conversation_id,
@@ -844,9 +907,62 @@ export class ChatRoom {
               timer_duration: m.timer_duration,
               expired: m.expired,
               is_photo: m.is_photo,
+              seen: !!m.seen,
+              message_type: m.message_type || "normal",
+              is_responded_to: m.is_responded_to || 0,
             })),
           })
         );
+        break;
+      }
+
+      // ── Mark message as seen (read receipts) ──────────────────────────────
+      case "MESSAGE_SEEN": {
+        if (!authedUser) return;
+        const convId = parseInt(data.conversationId, 10);
+        const messageId = parseInt(data.messageId, 10);
+        if (isNaN(convId) || isNaN(messageId)) return;
+
+        const msgRow = await db
+          .prepare("SELECT sender, receiver FROM messages WHERE id = ? AND conversation_id = ?")
+          .bind(messageId, convId)
+          .first<any>();
+        if (!msgRow || msgRow.receiver.toLowerCase() !== authedUser) return;
+
+        await db.prepare("UPDATE messages SET seen = 1 WHERE id = ?").bind(messageId).run();
+
+        const seenPayload = JSON.stringify({
+          type: "MESSAGE_SEEN_BROADCAST",
+          conversationId: convId,
+          messageId,
+          seenBy: authedUser,
+          seenAt: data.seenAt || Date.now(),
+        });
+
+        const senderWs = this.clients.get(msgRow.sender.toLowerCase());
+        if (senderWs?.readyState === WebSocket.OPEN) senderWs.send(seenPayload);
+        if (ws.readyState === WebSocket.OPEN) ws.send(seenPayload);
+        break;
+      }
+
+      // ── Normal message expired unanswered → wipe the whole chat ────────────
+      case "CHAT_EXPIRED_DELETE": {
+        if (!authedUser) return;
+        const convId = parseInt(data.conversationId, 10);
+        if (isNaN(convId)) return;
+
+        const convRow = await db
+          .prepare("SELECT * FROM conversations WHERE id = ?")
+          .bind(convId)
+          .first<any>();
+        if (!convRow) return;
+
+        const isParticipant =
+          convRow.participant_1.toLowerCase() === authedUser ||
+          convRow.participant_2.toLowerCase() === authedUser;
+        if (!isParticipant || convRow.saved === 1 || convRow.phase !== "active") return;
+
+        await this.deleteChat(convId);
         break;
       }
 
@@ -1067,6 +1183,35 @@ export class ChatRoom {
     }
   }
 
+  // Permanently wipe a chat: drop every message + timer and reset the conversation
+  // back to the opener phase. Broadcasts CHAT_DELETED to both participants. Idempotent.
+  private async deleteChat(convId: number): Promise<void> {
+    const db = this.env.DB;
+    const convRow = await db
+      .prepare("SELECT * FROM conversations WHERE id = ?")
+      .bind(convId)
+      .first<any>();
+    if (!convRow) return;
+
+    await db.batch([
+      db.prepare("DELETE FROM messages WHERE conversation_id = ?").bind(convId),
+      db.prepare("DELETE FROM timers WHERE conversation_id = ?").bind(convId),
+      db
+        .prepare("UPDATE conversations SET phase = 'awaiting_response', opener_initiator = NULL, opener_timer_choice = NULL WHERE id = ?")
+        .bind(convId),
+    ]);
+
+    const payload = JSON.stringify({ type: "CHAT_DELETED", conversationId: convId });
+    for (const username of [convRow.participant_1, convRow.participant_2]) {
+      const sock = this.clients.get(username.toLowerCase());
+      if (sock?.readyState === WebSocket.OPEN) sock.send(payload);
+    }
+    await Promise.all([
+      this.syncUser(convRow.participant_1),
+      this.syncUser(convRow.participant_2),
+    ]);
+  }
+
   // Replaces setInterval(checkTimers, 5000) — invoked via Durable Object alarm
   private async checkTimers(): Promise<void> {
     const db = this.env.DB;
@@ -1087,14 +1232,24 @@ export class ChatRoom {
       if (!conv) continue;
 
       if (remainingMs <= 0) {
-        await db.batch([
-          db.prepare("UPDATE messages SET expired = 1 WHERE conversation_id = ? AND expired = 0").bind(convId),
-          db.prepare("DELETE FROM timers WHERE id = ?").bind(timer.id),
-        ]);
-        await Promise.all([
-          this.syncUser(conv.participant_1),
-          this.syncUser(conv.participant_2),
-        ]);
+        if (timer.timer_type === "normal") {
+          // A normal message went unanswered → the entire chat is permanently deleted.
+          await this.deleteChat(convId);
+        } else {
+          // An opener went unanswered → expire it and reset to the opener phase so
+          // either participant may try a fresh opener. The chat is NOT deleted.
+          await db.batch([
+            db.prepare("UPDATE messages SET expired = 1 WHERE conversation_id = ? AND expired = 0").bind(convId),
+            db.prepare("DELETE FROM timers WHERE id = ?").bind(timer.id),
+            db
+              .prepare("UPDATE conversations SET phase = 'awaiting_response', opener_initiator = NULL, opener_timer_choice = NULL WHERE id = ?")
+              .bind(convId),
+          ]);
+          await Promise.all([
+            this.syncUser(conv.participant_1),
+            this.syncUser(conv.participant_2),
+          ]);
+        }
         continue;
       }
 

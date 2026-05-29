@@ -26,6 +26,10 @@ export interface Conversation {
   started_at: string;
   conversation_started: number; // 0 or 1
   saved: number; // 0 or 1
+  // Two-phase opener/normal economy (Prompt 1)
+  phase?: "awaiting_response" | "active";
+  opener_initiator?: string | null;
+  opener_timer_choice?: number | null;
   // v1.5 — Adaptive Privacy (Strategic Plan §4)
   privacy_mode?: 'standard' | 'ephemeral' | 'anonymous' | 'incognito';
   disappear_after_seconds?: number | null;
@@ -35,7 +39,7 @@ export interface Conversation {
 export interface Timer {
   id: number;
   conversation_id: number;
-  timer_type: 'opener' | 'response' | 'cooldown';
+  timer_type: 'opener' | 'normal' | 'response' | 'cooldown';
   started_at: string;
   duration_ms: number;
 }
@@ -61,7 +65,7 @@ export interface Message {
 
 export interface TimerState {
   conversation_id: number;
-  timer_type: 'opener' | 'response' | 'cooldown';
+  timer_type: 'opener' | 'normal' | 'response' | 'cooldown';
   started_at: number;
   duration_ms: number;
 }

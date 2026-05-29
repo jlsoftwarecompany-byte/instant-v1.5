@@ -390,6 +390,15 @@ export const Inbox: React.FC<InboxProps> = ({
                   const conversation = activeConversations.find(c => c.id === convId);
                   const isSaved = conversation?.saved === 1;
 
+                  // Two-phase opener status (Prompt 1)
+                  const phase = conversation?.phase || "awaiting_response";
+                  const openerInit = conversation?.opener_initiator
+                    ? String(conversation.opener_initiator).toLowerCase()
+                    : null;
+                  const iAmInitiator = !!openerInit && openerInit === currentUser.username;
+                  const showAwaiting = !isSaved && phase === "awaiting_response" && !!openerInit && iAmInitiator;
+                  const showRespond = !isSaved && phase === "awaiting_response" && !!openerInit && !iAmInitiator;
+
                   return (
                     <motion.div
                       key={friend.username}
@@ -433,7 +442,17 @@ export const Inbox: React.FC<InboxProps> = ({
                       </div>
 
                       <div className="flex items-center gap-3">
-                        {hasTimer && !isSaved && (
+                        {showAwaiting && (
+                          <span className="px-2 py-0.5 text-[9px] font-black text-amber-500 bg-amber-500/5 border border-amber-500/20 rounded-md tracking-wider uppercase flex items-center gap-1">
+                            ⏳ Awaiting response
+                          </span>
+                        )}
+                        {showRespond && (
+                          <span className="px-2 py-0.5 text-[9px] font-black text-cyan-500 bg-[#25F4EE]/5 border border-[#25F4EE]/20 rounded-md tracking-wider uppercase flex items-center gap-1 animate-pulse">
+                            💬 Respond to start
+                          </span>
+                        )}
+                        {hasTimer && !isSaved && !showAwaiting && !showRespond && (
                           <span className="px-2 py-0.5 text-[9px] font-black text-rose-500 bg-rose-500/5 border border-rose-500/15 rounded-md tracking-wider uppercase flex items-center gap-1 animate-pulse">
                             <Clock className="w-2.5 h-2.5 shrink-0" />
                             EXPIRY RUNNING

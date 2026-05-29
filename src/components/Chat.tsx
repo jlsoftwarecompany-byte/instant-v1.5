@@ -41,12 +41,11 @@ export const Chat: React.FC<ChatProps> = ({
     initialSaved ? "saved" : "idle"
   );
 
-  // Conversation Phase: Opener (waiting for response) or Active (normal messages)
+  // Conversation Phase (server-authoritative): "awaiting_response" while an opener
+  // is outstanding (or none sent yet) or "active" once the opener has been answered.
   const [conversationPhase, setConversationPhase] = useState<"awaiting_response" | "active">("awaiting_response");
   const [openerInitiator, setOpenerInitiator] = useState<string | null>(null);
-  const [isWaitingForOpenerResponse, setIsWaitingForOpenerResponse] = useState(false);
-  const [openerMessageId, setOpenerMessageId] = useState<number | null>(null);
-  const [openerTimerChoice, setOpenerTimerChoice] = useState<"10m" | "1hr" | "12hr" | null>(null);
+  const [openerTimerChoice, setOpenerTimerChoice] = useState<number | null>(null);
 
   // Feedback Toast
   const [feedbackToast, setFeedbackToast] = useState<string>("");
@@ -86,6 +85,9 @@ export const Chat: React.FC<ChatProps> = ({
         case "HISTORY_SYNC":
           if (data.conversationId === conversationId) {
             setMessages(data.messages);
+            setConversationPhase(data.phase || "awaiting_response");
+            setOpenerInitiator(data.openerInitiator ?? null);
+            setOpenerTimerChoice(data.openerTimerChoice ?? null);
           }
           break;
 
@@ -98,14 +100,32 @@ export const Chat: React.FC<ChatProps> = ({
               return [...prev, data.message];
             });
 
-            // Start timer based on sent message
+            // Sync server-authoritative phase state carried with the broadcast
+            if (data.phase) setConversationPhase(data.phase);
+            setOpenerInitiator(data.openerInitiator ?? null);
+            if (data.openerTimerChoice !== undefined) setOpenerTimerChoice(data.openerTimerChoice);
+
+            // Start the countdown that matches this message's timer kind
             const newTimer: TimerState = {
               conversation_id: conversationId,
-              timer_type: "opener",
+              timer_type: data.message.message_type === "opener" ? "opener" : "normal",
               started_at: data.message.sent_at,
               duration_ms: data.message.timer_duration
             };
             setActiveTimer(newTimer);
+          }
+          break;
+
+        case "CHAT_DELETED":
+          if (data.conversationId === conversationId) {
+            // A normal message went unanswered — the chat was permanently wiped.
+            setMessages([]);
+            setActiveTimer(null);
+            setConversationPhase("awaiting_response");
+            setOpenerInitiator(null);
+            setOpenerTimerChoice(null);
+            messageVisibilityRef.current.clear();
+            triggerToast("Chat expired — messages were permanently deleted");
           }
           break;
 
@@ -131,8 +151,11 @@ export const Chat: React.FC<ChatProps> = ({
 
           // Keep active conversations states sync
           const conv = data.conversations.find((c: any) => c.id === conversationId);
-          if (conv && conv.saved === 1) {
-            setSaveStatus("saved");
+          if (conv) {
+            if (conv.saved === 1) setSaveStatus("saved");
+            if (conv.phase) setConversationPhase(conv.phase);
+            setOpenerInitiator(conv.opener_initiator ? String(conv.opener_initiator).toLowerCase() : null);
+            setOpenerTimerChoice(conv.opener_timer_choice ?? null);
           }
           break;
         }
@@ -182,6 +205,13 @@ export const Chat: React.FC<ChatProps> = ({
         setActiveTimer(null);
         // Promptly mark older messages as expired locally
         setMessages(prev => prev.map(m => ({ ...m, expired: 1 })));
+        // A normal message that went unanswered wipes the whole chat. Ask the
+        // server to delete it (the server timer monitor is the authoritative
+        // fallback; this just makes deletion feel instant). Opener expiry only
+        // resets the opener and never deletes.
+        if (activeTimer.timer_type === "normal") {
+          wsService.send({ type: "CHAT_EXPIRED_DELETE", conversationId });
+        }
         clearInterval(interval);
       } else {
         setTimeLeftMs(remaining);
@@ -256,48 +286,12 @@ export const Chat: React.FC<ChatProps> = ({
     };
   }, [messages]);
 
-  // Detect and update conversation phase based on messages
+  // Keep the composer's default timer sensible for the current phase: openers
+  // default to 10m, everything else (responses / normal messages) to 60s.
   useEffect(() => {
-    if (messages.length === 0) {
-      // No messages yet — current user should be able to send opener
-      setConversationPhase("awaiting_response");
-      setOpenerInitiator(currentUser.username);
-    } else if (messages.length === 1) {
-      // One message (an opener) exists
-      const firstMsg = messages[0];
-      if (firstMsg.message_type === "opener" || !firstMsg.message_type) {
-        setOpenerInitiator(firstMsg.sender);
-        setConversationPhase("awaiting_response");
-        setOpenerMessageId(firstMsg.id);
-        // If current user sent the opener, mark as waiting
-        if (firstMsg.sender === currentUser.username) {
-          setIsWaitingForOpenerResponse(true);
-          // Extract timer choice
-          if (firstMsg.timer_duration === 600000) setOpenerTimerChoice("10m");
-          else if (firstMsg.timer_duration === 3600000) setOpenerTimerChoice("1hr");
-          else if (firstMsg.timer_duration === 43200000) setOpenerTimerChoice("12hr");
-        }
-      }
-    } else if (messages.length >= 2) {
-      // Multiple messages — check if opener has been responded to
-      const hasResponseToOpener = messages.some(m =>
-        m.message_type === "opener" && m.is_responded_to === 1
-      );
-      if (hasResponseToOpener) {
-        setConversationPhase("active");
-      } else {
-        // Still in opener phase
-        const openerMsg = messages.find(m => m.message_type === "opener" || !m.message_type);
-        if (openerMsg) {
-          setOpenerInitiator(openerMsg.sender);
-          setOpenerMessageId(openerMsg.id);
-          if (openerMsg.timer_duration === 600000) setOpenerTimerChoice("10m");
-          else if (openerMsg.timer_duration === 3600000) setOpenerTimerChoice("1hr");
-          else if (openerMsg.timer_duration === 43200000) setOpenerTimerChoice("12hr");
-        }
-      }
-    }
-  }, [messages.length, currentUser.username]);
+    const canOpen = conversationPhase === "awaiting_response" && !openerInitiator;
+    setTimerDuration(canOpen ? 600000 : 60000);
+  }, [conversationPhase, openerInitiator]);
 
   const triggerToast = (msg: string) => {
     setFeedbackToast(msg);
@@ -322,8 +316,17 @@ export const Chat: React.FC<ChatProps> = ({
     }
   };
 
+  // Whether the next message is a brand-new opener (awaiting phase + no outstanding opener).
+  const isOpenerTurn = conversationPhase === "awaiting_response" && !openerInitiator;
+  // The initiator is locked out until their opener gets a response.
+  const isWaitingForResponse =
+    conversationPhase === "awaiting_response" &&
+    !!openerInitiator &&
+    openerInitiator === currentUser.username.toLowerCase();
+
   const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault();
+    if (isWaitingForResponse) return;
     if (!inputText.trim() && !isPhotoSelected) return;
 
     const payload = {
@@ -333,7 +336,8 @@ export const Chat: React.FC<ChatProps> = ({
       sentAt: Date.now(),
       timerDuration: timerDuration,
       isPhoto: isPhotoSelected ? 1 : 0,
-      photoData: isPhotoSelected ? selectedPhotoBase64 : undefined
+      photoData: isPhotoSelected ? selectedPhotoBase64 : undefined,
+      messageType: isOpenerTurn ? "opener" : "normal"
     };
 
     wsService.send(payload);
@@ -346,6 +350,7 @@ export const Chat: React.FC<ChatProps> = ({
 
   // Dedicated websocket sender for in-app captured + compressed cameras
   const handleSendCameraPhoto = (base64PhotoString: string) => {
+    if (isWaitingForResponse) return;
     const payload = {
       type: "CHAT_MESSAGE",
       to: contact.username,
@@ -353,7 +358,8 @@ export const Chat: React.FC<ChatProps> = ({
       sentAt: Date.now(),
       timerDuration: timerDuration,
       isPhoto: 1,
-      photoData: base64PhotoString
+      photoData: base64PhotoString,
+      messageType: isOpenerTurn ? "opener" : "normal"
     };
     wsService.send(payload);
   };
@@ -412,7 +418,7 @@ export const Chat: React.FC<ChatProps> = ({
       </AnimatePresence>
 
       {/* Chat Header details */}
-      <header className="px-5 py-4 border-b theme-border bg-[var(--background)] sticky top-0 z-40 flex items-center justify-between shadow-xs">
+      <header className="px-4 py-3 border-b theme-border bg-[var(--background)] sticky top-0 z-40 flex items-center justify-between shadow-xs">
         <div className="flex items-center gap-3">
           <button
             onClick={onBack}
@@ -449,14 +455,16 @@ export const Chat: React.FC<ChatProps> = ({
       </header>
 
       {/* Message List area */}
-      <div className="flex-1 overflow-y-auto px-5 py-6 space-y-4">
+      <div className="flex-1 overflow-y-auto px-3 sm:px-5 py-4 space-y-3 sm:space-y-4">
         {messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center text-center h-full max-w-xs mx-auto space-y-3">
             <div className="w-10 h-10 rounded-full bg-zinc-100 dark:bg-zinc-900/65 flex items-center justify-center text-zinc-400">
               <Clock className="w-5 h-5 text-pink-500 animate-pulse" />
             </div>
             <p className="text-xs text-zinc-400 font-sans leading-relaxed">
-              No messages. Send a message with an expiration timer to get started!
+              {isOpenerTurn
+                ? "Send an opener with a 10m, 1hr or 12hr timer. When they reply, you both earn links."
+                : "No messages yet."}
             </p>
           </div>
         ) : (
@@ -478,10 +486,30 @@ export const Chat: React.FC<ChatProps> = ({
         <div ref={messagesEndRef} />
       </div>
 
+      {/* Initiator is locked out until their opener gets a response */}
+      {saveStatus !== "saved" && isWaitingForResponse && (
+        <div className="p-4 border-t theme-border bg-[var(--background)] sticky bottom-0 z-40">
+          <div className="flex items-center justify-center gap-2 px-4 py-3 rounded-2xl border border-amber-500/20 bg-amber-500/5 text-amber-500">
+            <Clock className="w-4 h-4 animate-pulse shrink-0" />
+            <span className="text-xs font-black uppercase tracking-wider text-center">
+              Waiting for {contact.nickname} to respond to your opener…
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* Bottom Message Composer */}
-      {saveStatus !== "saved" && (
-        <form onSubmit={handleSendMessage} className="p-4 border-t theme-border bg-[var(--background)] sticky bottom-0 z-40">
-          
+      {saveStatus !== "saved" && !isWaitingForResponse && (
+        <form onSubmit={handleSendMessage} className="p-3 border-t theme-border bg-[var(--background)] sticky bottom-0 z-40 overflow-x-hidden">
+
+          {/* Responder hint while answering an opener */}
+          {conversationPhase === "awaiting_response" && !isOpenerTurn && (
+            <div className="mb-3 px-3 py-2 rounded-xl border border-[#25F4EE]/20 bg-[#25F4EE]/5 text-[11px] font-bold text-cyan-500 flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5 shrink-0" />
+              Reply to start the chat — you both earn {openerTimerChoice ? (openerTimerChoice === 600000 ? 3 : openerTimerChoice === 3600000 ? 2 : 1) : 1} link{(openerTimerChoice === 600000 ? 3 : openerTimerChoice === 3600000 ? 2 : 1) === 1 ? "" : "s"}.
+            </div>
+          )}
+
           {/* Temporary Photo attachment preview widget */}
           {isPhotoSelected && (
             <div className="mb-3.5 p-2 border border-pink-500/20 bg-pink-500/5 rounded-xl flex items-center justify-between select-none animate-in fade-in zoom-in duration-200">
@@ -507,31 +535,45 @@ export const Chat: React.FC<ChatProps> = ({
             </div>
           )}
 
-          {/* Message Expiry Timer — Quick Presets Only */}
+          {/* Message Expiry Timer — phase-aware presets */}
           <div className="mb-4 bg-zinc-50/50 dark:bg-zinc-900/40 p-3 rounded-2xl border theme-border">
             <div className="flex items-center justify-between mb-2.5">
               <span className="text-[10px] font-black tracking-widest text-[var(--foreground)] opacity-75 uppercase flex items-center gap-1.5">
-                <Clock className="w-3.5 h-3.5 text-pink-500 animate-pulse" /> Message Expiry:
+                <Clock className="w-3.5 h-3.5 text-pink-500 animate-pulse" />
+                {isOpenerTurn ? "Opener Timer:" : "Reply Expiry:"}
               </span>
               <span className="px-2 py-0.5 text-xs font-black rounded-lg bg-pink-500/15 text-pink-500 border border-pink-500/20 shadow-xs animate-pulse">
                 {(() => {
                   const s = Math.round(timerDuration / 1000);
                   if (s < 60) return `${s}s`;
                   const m = Math.floor(s / 60);
-                  const rem = s % 60;
-                  return rem === 0 ? `${m}m` : `${m}m ${rem}s`;
+                  if (m < 60) { const rem = s % 60; return rem === 0 ? `${m}m` : `${m}m ${rem}s`; }
+                  const h = Math.floor(m / 60); const remM = m % 60;
+                  return remM === 0 ? `${h}h` : `${h}h ${remM}m`;
                 })()}
               </span>
             </div>
 
-            {/* Four Timer Preset Buttons */}
-            <div className="grid grid-cols-4 gap-2">
-              {[
-                { label: "10s 🔥", val: 10000 },
-                { label: "30s", val: 30000 },
-                { label: "5m", val: 300000 },
-                { label: "30m", val: 1800000 }
-              ].map(opt => (
+            {!isOpenerTurn && (
+              <p className="text-[9px] text-rose-500 font-bold mb-2 uppercase tracking-wide">
+                ⚠ If this timer runs out unanswered, the whole chat is deleted.
+              </p>
+            )}
+
+            {/* Timer Preset Buttons — openers (10m/1hr/12hr) vs normal (10s/60s/5m) */}
+            <div className={`grid gap-2 ${isOpenerTurn ? "grid-cols-3" : "grid-cols-3"}`}>
+              {(isOpenerTurn
+                ? [
+                    { label: "10m · +3", val: 600000 },
+                    { label: "1hr · +2", val: 3600000 },
+                    { label: "12hr · +1", val: 43200000 }
+                  ]
+                : [
+                    { label: "10s 🔥", val: 10000 },
+                    { label: "60s", val: 60000 },
+                    { label: "5m", val: 300000 }
+                  ]
+              ).map(opt => (
                 <button
                   key={opt.val}
                   type="button"
@@ -558,13 +600,13 @@ export const Chat: React.FC<ChatProps> = ({
             </div>
           )}
 
-          <div className="flex items-center gap-2">
-            
+          <div className="flex items-center gap-1.5 overflow-x-auto">
+
             {/* Gallery Upload file button */}
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="p-3.5 rounded-xl border theme-border bg-black/5 dark:bg-zinc-900 hover:bg-black/10 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300 hover:text-pink-500 transition flex items-center justify-center shadow-xs shrink-0 cursor-pointer"
+              className="p-3 rounded-lg border theme-border bg-black/5 dark:bg-zinc-900 hover:bg-black/10 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300 hover:text-pink-500 transition flex items-center justify-center shadow-xs shrink-0 cursor-pointer"
               title="Upload Photo File"
             >
               <ImageIcon className="w-5 h-5" />
@@ -574,7 +616,7 @@ export const Chat: React.FC<ChatProps> = ({
             <button
               type="button"
               onClick={() => setShowCamera(true)}
-              className="p-3.5 rounded-xl border theme-border bg-[#FE2C55]/5 text-[#FE2C55] hover:bg-[#FE2C55]/10 border-pink-500/20 transition flex items-center justify-center shadow-xs shrink-0 cursor-pointer"
+              className="p-3 rounded-lg border theme-border bg-[#FE2C55]/5 text-[#FE2C55] hover:bg-[#FE2C55]/10 border-pink-500/20 transition flex items-center justify-center shadow-xs shrink-0 cursor-pointer"
               title="In-App Camera Capture"
             >
               <Camera className="w-5 h-5" />
@@ -594,7 +636,7 @@ export const Chat: React.FC<ChatProps> = ({
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
                 placeholder="Type and choose expiration time..."
-                className="flex-1 px-4 py-3.5 rounded-xl border theme-border bg-[var(--background)] font-sans text-sm theme-text-primary focus:outline-none focus:ring-1 focus:ring-pink-500 transition"
+                className="flex-1 px-3 py-3 rounded-xl border theme-border bg-[var(--background)] font-sans text-sm theme-text-primary focus:outline-none focus:ring-1 focus:ring-pink-500 transition min-w-0"
               />
             )}
 
@@ -603,14 +645,14 @@ export const Chat: React.FC<ChatProps> = ({
                 type="text"
                 disabled
                 placeholder="Press send to transmit the selected photo attachment"
-                className="flex-1 px-4 py-3.5 rounded-xl border theme-border bg-[#FE2C55]/5 text-[#FE2C55] font-medium italic text-sm"
+                className="flex-1 px-3 py-3 rounded-xl border theme-border bg-[#FE2C55]/5 text-[#FE2C55] font-medium italic text-sm min-w-0"
               />
             )}
 
             <button
               type="submit"
               disabled={(!inputText.trim() && !isPhotoSelected)}
-              className="p-3.5 bg-gradient-to-r from-[#FE2C55] to-[#a855f7] hover:opacity-95 disabled:from-zinc-400/20 disabled:to-zinc-400/30 disabled:text-zinc-500/40 text-white rounded-xl transition flex items-center justify-center shadow-lg shadow-pink-500/5 shrink-0 cursor-pointer active:scale-95"
+              className="p-3 bg-gradient-to-r from-[#FE2C55] to-[#a855f7] hover:opacity-95 disabled:from-zinc-400/20 disabled:to-zinc-400/30 disabled:text-zinc-500/40 text-white rounded-xl transition flex items-center justify-center shadow-lg shadow-pink-500/5 shrink-0 cursor-pointer active:scale-95"
             >
               <Send className="w-5 h-5" />
             </button>

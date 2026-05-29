@@ -52,7 +52,10 @@ db.exec(`
     participant_2 TEXT NOT NULL,
     started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     conversation_started BOOLEAN DEFAULT 0,
-    saved BOOLEAN DEFAULT 0
+    saved BOOLEAN DEFAULT 0,
+    phase TEXT DEFAULT 'awaiting_response',
+    opener_initiator TEXT,
+    opener_timer_choice INTEGER
   );
 
   CREATE TABLE IF NOT EXISTS timers (
@@ -72,7 +75,9 @@ db.exec(`
     sent_at INTEGER NOT NULL,
     timer_duration INTEGER NOT NULL,
     expired BOOLEAN DEFAULT 0,
-    is_photo BOOLEAN DEFAULT 0
+    is_photo BOOLEAN DEFAULT 0,
+    message_type TEXT DEFAULT 'normal',
+    is_responded_to INTEGER DEFAULT 0
   );
 `);
 
@@ -94,6 +99,25 @@ try {
 } catch (e) {}
 try {
   db.exec("ALTER TABLE users ADD COLUMN session_expires_at DATETIME");
+} catch (e) {}
+try {
+  db.exec("ALTER TABLE messages ADD COLUMN seen BOOLEAN DEFAULT 0");
+} catch (e) {}
+// Two-phase opener/normal economy (Prompt 1)
+try {
+  db.exec("ALTER TABLE messages ADD COLUMN message_type TEXT DEFAULT 'normal'");
+} catch (e) {}
+try {
+  db.exec("ALTER TABLE messages ADD COLUMN is_responded_to INTEGER DEFAULT 0");
+} catch (e) {}
+try {
+  db.exec("ALTER TABLE conversations ADD COLUMN phase TEXT DEFAULT 'awaiting_response'");
+} catch (e) {}
+try {
+  db.exec("ALTER TABLE conversations ADD COLUMN opener_initiator TEXT");
+} catch (e) {}
+try {
+  db.exec("ALTER TABLE conversations ADD COLUMN opener_timer_choice INTEGER");
 } catch (e) {}
 
 // Web Push setup
@@ -298,6 +322,41 @@ function broadcastFriendUpdateForUser(username: string) {
 
 function syncUserFullData(username: string) {
   broadcastFriendUpdateForUser(username);
+}
+
+// ─── Two-phase opener/normal economy (Prompt 1) ─────────────────────────────
+// Opener timers and their fixed link reward on a successful response.
+const OPENER_DURATIONS: Record<number, number> = {
+  600000: 3,    // 10 minutes  → 3 links
+  3600000: 2,   // 1 hour      → 2 links
+  43200000: 1,  // 12 hours    → 1 link
+};
+const NORMAL_DURATIONS = new Set([10000, 60000, 300000]); // 10s / 60s / 5m
+
+function openerReward(durationMs: number): number {
+  return OPENER_DURATIONS[durationMs] ?? 1;
+}
+
+// Permanently wipe a chat: drop every message + timer and reset the conversation
+// back to the opener phase so either participant may start a fresh opener.
+// Broadcasts CHAT_DELETED to both participants. Idempotent.
+function deleteChat(convId: number) {
+  const convRow = db.prepare("SELECT * FROM conversations WHERE id = ?").get(convId) as any;
+  if (!convRow) return;
+
+  db.prepare("DELETE FROM messages WHERE conversation_id = ?").run(convId);
+  db.prepare("DELETE FROM timers WHERE conversation_id = ?").run(convId);
+  db.prepare(
+    "UPDATE conversations SET phase = 'awaiting_response', opener_initiator = NULL, opener_timer_choice = NULL WHERE id = ?"
+  ).run(convId);
+
+  const payload = JSON.stringify({ type: "CHAT_DELETED", conversationId: convId });
+  for (const username of [convRow.participant_1, convRow.participant_2]) {
+    const sock = clients.get(username.toLowerCase());
+    if (sock && sock.readyState === WebSocket.OPEN) sock.send(payload);
+  }
+  syncUserFullData(convRow.participant_1);
+  syncUserFullData(convRow.participant_2);
 }
 
 // WS Connection main routing
@@ -805,7 +864,7 @@ wss.on("connection", (ws) => {
           const target = (to || "").toLowerCase().trim();
 
           const conv = db.prepare(`
-            SELECT id FROM conversations 
+            SELECT * FROM conversations
             WHERE (LOWER(participant_1) = ? AND LOWER(participant_2) = ?)
                OR (LOWER(participant_1) = ? AND LOWER(participant_2) = ?)
           `).get(authenticatedUser, target, target, authenticatedUser) as any;
@@ -816,13 +875,39 @@ wss.on("connection", (ws) => {
           }
 
           const convId = conv.id;
+          const phase: string = conv.phase || "awaiting_response";
+          const initiator: string | null = conv.opener_initiator ? conv.opener_initiator.toLowerCase() : null;
 
-          // Save message to SQLite
-          const msgStmt = db.prepare(`
-            INSERT INTO messages (conversation_id, sender, receiver, content, sent_at, timer_duration, expired, is_photo)
-            VALUES (?, ?, ?, ?, ?, ?, 0, ?)
-          `);
-          const msgInfo = msgStmt.run(convId, authenticatedUser, target, content || "", sentAt, timerDuration, isPhoto ? 1 : 0);
+          // Decide what kind of message this is from the current phase.
+          // - awaiting_response + no outstanding opener  → this is the OPENER
+          // - awaiting_response + I am the initiator       → blocked (no 2nd opener)
+          // - awaiting_response + I am the responder       → opener RESPONSE (→ active)
+          // - active                                       → NORMAL message
+          let messageType: "opener" | "normal" = "normal";
+          let isOpenerResponse = false;
+
+          if (phase === "awaiting_response") {
+            if (!initiator) {
+              messageType = "opener";
+            } else if (initiator === authenticatedUser) {
+              ws.send(JSON.stringify({ type: "ERROR", message: "Wait for a response before sending another opener." }));
+              return;
+            } else {
+              isOpenerResponse = true;
+            }
+          }
+
+          // Validate the chosen timer for the message kind.
+          const duration = messageType === "opener"
+            ? (OPENER_DURATIONS[timerDuration] ? timerDuration : 600000)
+            : (NORMAL_DURATIONS.has(timerDuration) ? timerDuration : 60000);
+
+          // Save the message.
+          const msgInfo = db.prepare(`
+            INSERT INTO messages (conversation_id, sender, receiver, content, sent_at, timer_duration, expired, is_photo, message_type, is_responded_to)
+            VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, 0)
+          `).run(convId, authenticatedUser, target, content || "", sentAt, duration, isPhoto ? 1 : 0, messageType);
+
           const savedMsg = {
             id: msgInfo.lastInsertRowid as number,
             conversation_id: convId,
@@ -830,59 +915,64 @@ wss.on("connection", (ws) => {
             receiver: target,
             content: content || "",
             sent_at: sentAt,
-            timer_duration: timerDuration,
+            timer_duration: duration,
             expired: 0,
-            is_photo: isPhoto ? 1 : 0
+            is_photo: isPhoto ? 1 : 0,
+            seen: false,
+            message_type: messageType,
+            is_responded_to: 0
           };
 
-          // Handle Timer entries
-          // Check if there is an active timer in this conversation
-          const activeTimer = db.prepare("SELECT * FROM timers WHERE conversation_id = ?").get(convId) as any;
-          
           let earnedLinks = 0;
-          if (activeTimer) {
-            // This message is a RESPONSE to an active timer!
-            // First check if response was sent BEFORE timer expired
-            const isResponseInTime = (sentAt - new Date(activeTimer.started_at).getTime()) <= activeTimer.duration_ms;
-            
-            if (isResponseInTime && activeTimer.timer_type === "opener" && target === authenticatedUser) {
-              // Trigger 2: Successful opener response!
-              // Count total messages
-              const msgCountRow = db.prepare("SELECT COUNT(*) as count FROM messages WHERE conversation_id = ?").get(convId) as any;
-              const msgCount = msgCountRow ? msgCountRow.count : 1;
-              earnedLinks = Math.max(1, Math.ceil(Math.log(msgCount) / Math.log(1.2)));
+          let newPhase = phase;
+          let newInitiator = initiator;
+          let newTimerChoice: number | null = conv.opener_timer_choice ?? null;
 
-              // Apply grant
-              db.prepare("UPDATE users SET links = links + ? WHERE LOWER(username) = ?").run(earnedLinks, authenticatedUser);
-              db.prepare("UPDATE users SET links = links + ? WHERE LOWER(username) = ?").run(earnedLinks, target);
+          db.prepare("DELETE FROM timers WHERE conversation_id = ?").run(convId);
 
-              // Clear the active timer since it was successfully completed and responded to
-              db.prepare("DELETE FROM timers WHERE id = ?").run(activeTimer.id);
-            }
+          if (messageType === "opener") {
+            // Register the opener and start its (long) timer.
+            db.prepare(
+              "UPDATE conversations SET phase = 'awaiting_response', opener_initiator = ?, opener_timer_choice = ? WHERE id = ?"
+            ).run(authenticatedUser, duration, convId);
+            db.prepare(
+              "INSERT INTO timers (conversation_id, timer_type, started_at, duration_ms) VALUES (?, 'opener', ?, ?)"
+            ).run(convId, new Date(sentAt).toISOString(), duration);
+            newPhase = "awaiting_response";
+            newInitiator = authenticatedUser;
+            newTimerChoice = duration;
+          } else if (isOpenerResponse) {
+            // Successful opener response → fixed reward to both, flip to active.
+            earnedLinks = openerReward(conv.opener_timer_choice ?? 0);
+            db.prepare("UPDATE users SET links = links + ? WHERE LOWER(username) = ?").run(earnedLinks, authenticatedUser);
+            db.prepare("UPDATE users SET links = links + ? WHERE LOWER(username) = ?").run(earnedLinks, target);
+            db.prepare(
+              "UPDATE messages SET is_responded_to = 1 WHERE conversation_id = ? AND message_type = 'opener' AND is_responded_to = 0"
+            ).run(convId);
+            db.prepare("UPDATE conversations SET phase = 'active' WHERE id = ?").run(convId);
+            db.prepare(
+              "INSERT INTO timers (conversation_id, timer_type, started_at, duration_ms) VALUES (?, 'normal', ?, ?)"
+            ).run(convId, new Date(sentAt).toISOString(), duration);
+            newPhase = "active";
+          } else {
+            // Normal message in an active chat → reset the (short) response timer.
+            db.prepare(
+              "INSERT INTO timers (conversation_id, timer_type, started_at, duration_ms) VALUES (?, 'normal', ?, ?)"
+            ).run(convId, new Date(sentAt).toISOString(), duration);
           }
 
-          // Create a new active timer
-          // Sender sets a timer of duration `timerDuration` (e.g. 30s, 5m, 30m)
-          // Since they are sending a message, this starts an 'opener' timer (or 'response' timer)
-          // Delete prior timers of this conversation to be clean
-          db.prepare("DELETE FROM timers WHERE conversation_id = ?").run(convId);
-          
-          db.prepare(`
-            INSERT INTO timers (conversation_id, timer_type, started_at, duration_ms)
-            VALUES (?, 'opener', ?, ?)
-          `).run(convId, new Date(sentAt).toISOString(), timerDuration);
-
-          // Retrieve updated links counts
           const senderUser = db.prepare("SELECT links FROM users WHERE LOWER(username) = ?").get(authenticatedUser) as any;
           const targetUser = db.prepare("SELECT links FROM users WHERE LOWER(username) = ?").get(target) as any;
 
-          // Deliver message in real-time
           const targetSocket = clients.get(target);
           const senderSocket = ws;
 
           const broadcastPayload = JSON.stringify({
             type: "CHAT_MESSAGE_BROADCAST",
-            message: savedMsg
+            message: savedMsg,
+            phase: newPhase,
+            openerInitiator: newInitiator,
+            openerTimerChoice: newTimerChoice
           });
 
           if (senderSocket && senderSocket.readyState === WebSocket.OPEN) {
@@ -908,7 +998,6 @@ wss.on("connection", (ws) => {
               }));
             }
           } else {
-            // Recipient is offline -> send web push notification
             const senderInfo = db.prepare("SELECT nickname FROM users WHERE LOWER(username) = ?").get(authenticatedUser) as any;
             await sendPushNotification(
               target,
@@ -930,9 +1019,13 @@ wss.on("connection", (ws) => {
 
           // Retrieve messages
           const msgs = db.prepare("SELECT * FROM messages WHERE conversation_id = ? ORDER BY sent_at ASC").all(convId) as any[];
+          const histConv = db.prepare("SELECT phase, opener_initiator, opener_timer_choice FROM conversations WHERE id = ?").get(convId) as any;
           ws.send(JSON.stringify({
             type: "HISTORY_SYNC",
             conversationId: convId,
+            phase: histConv?.phase || "awaiting_response",
+            openerInitiator: histConv?.opener_initiator ? histConv.opener_initiator.toLowerCase() : null,
+            openerTimerChoice: histConv?.opener_timer_choice ?? null,
             messages: msgs.map(m => ({
               id: m.id,
               conversation_id: m.conversation_id,
@@ -942,9 +1035,58 @@ wss.on("connection", (ws) => {
               sent_at: m.sent_at,
               timer_duration: m.timer_duration,
               expired: m.expired,
-              is_photo: m.is_photo
+              is_photo: m.is_photo,
+              seen: !!m.seen,
+              message_type: m.message_type || "normal",
+              is_responded_to: m.is_responded_to || 0
             }))
           }));
+          break;
+        }
+
+        case "MESSAGE_SEEN": {
+          if (!authenticatedUser) return;
+          const convId = parseInt(data.conversationId, 10);
+          const messageId = parseInt(data.messageId, 10);
+          if (isNaN(convId) || isNaN(messageId)) return;
+
+          // Only the receiver of a message may mark it seen
+          const msgRow = db.prepare(
+            "SELECT sender, receiver FROM messages WHERE id = ? AND conversation_id = ?"
+          ).get(messageId, convId) as any;
+          if (!msgRow || msgRow.receiver.toLowerCase() !== authenticatedUser) return;
+
+          db.prepare("UPDATE messages SET seen = 1 WHERE id = ?").run(messageId);
+
+          const seenPayload = JSON.stringify({
+            type: "MESSAGE_SEEN_BROADCAST",
+            conversationId: convId,
+            messageId,
+            seenBy: authenticatedUser,
+            seenAt: data.seenAt || Date.now()
+          });
+
+          // Notify both participants so the sender's checkmark updates in real time
+          const senderSocket = clients.get(msgRow.sender.toLowerCase());
+          if (senderSocket && senderSocket.readyState === WebSocket.OPEN) senderSocket.send(seenPayload);
+          if (ws.readyState === WebSocket.OPEN) ws.send(seenPayload);
+          break;
+        }
+
+        case "CHAT_EXPIRED_DELETE": {
+          if (!authenticatedUser) return;
+          const convId = parseInt(data.conversationId, 10);
+          if (isNaN(convId)) return;
+
+          const convRow = db.prepare("SELECT * FROM conversations WHERE id = ?").get(convId) as any;
+          // Only a participant of an active (un-saved) chat may trigger deletion.
+          if (!convRow) return;
+          const isParticipant =
+            convRow.participant_1.toLowerCase() === authenticatedUser ||
+            convRow.participant_2.toLowerCase() === authenticatedUser;
+          if (!isParticipant || convRow.saved === 1 || convRow.phase !== "active") return;
+
+          deleteChat(convId);
           break;
         }
 
@@ -1074,14 +1216,20 @@ const timerMonitorInterval = setInterval(() => {
 
     // 1. Check for expiration
     if (remainingMs <= 0) {
-      // Message expired! Update expired flag of the conversation's messages
-      db.prepare("UPDATE messages SET expired = 1 WHERE conversation_id = ? AND expired = 0").run(convId);
-      // Clean timer
-      db.prepare("DELETE FROM timers WHERE id = ?").run(timer.id);
-
-      // Broadcast update to online users
-      syncUserFullData(convRow.participant_1);
-      syncUserFullData(convRow.participant_2);
+      if (timer.timer_type === "normal") {
+        // A normal message went unanswered → the entire chat is permanently deleted.
+        deleteChat(convId);
+      } else {
+        // An opener went unanswered → expire it and reset to the opener phase so
+        // either participant may try a fresh opener. The chat is NOT deleted.
+        db.prepare("UPDATE messages SET expired = 1 WHERE conversation_id = ? AND expired = 0").run(convId);
+        db.prepare("DELETE FROM timers WHERE id = ?").run(timer.id);
+        db.prepare(
+          "UPDATE conversations SET phase = 'awaiting_response', opener_initiator = NULL, opener_timer_choice = NULL WHERE id = ?"
+        ).run(convId);
+        syncUserFullData(convRow.participant_1);
+        syncUserFullData(convRow.participant_2);
+      }
       continue;
     }
 
