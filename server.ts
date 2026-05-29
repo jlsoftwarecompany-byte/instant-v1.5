@@ -14,7 +14,17 @@ dotenv.config();
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: "1mb" }));
+
+// Security headers
+app.use((req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("X-XSS-Protection", "1; mode=block");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("Permissions-Policy", "camera=(self), microphone=(self), geolocation=()");
+  next();
+});
 
 // Initialize SQLite database
 const db = new Database("instant.db");
@@ -163,9 +173,16 @@ app.get("/api/vapid-public-key", (req, res) => {
 
 // Endpoint to save subscription via POST
 app.post("/api/save-subscription", (req, res) => {
-  const { username, subscription } = req.body;
+  const { username, subscription, sessionToken } = req.body;
   if (!username) {
     return res.status(400).json({ error: "Username required" });
+  }
+  if (!sessionToken) {
+    return res.status(401).json({ error: "Authentication required" });
+  }
+  const userRow = db.prepare("SELECT id FROM users WHERE LOWER(username) = ? AND session_token = ?").get(username.toLowerCase(), sessionToken) as any;
+  if (!userRow) {
+    return res.status(401).json({ error: "Invalid session" });
   }
   try {
     const subJSON = subscription ? JSON.stringify(subscription) : null;
@@ -594,84 +611,19 @@ wss.on("connection", (ws) => {
         }
 
         case "REGISTER_USER": {
-          const regUsername = (data.username || "").toLowerCase().trim();
-          const regNickname = (data.nickname || "").trim();
-
-          if (!regUsername || !regNickname) {
-            ws.send(JSON.stringify({ type: "ERROR", message: "Username and Nickname are required" }));
-            return;
-          }
-
-          // Validate constraints
-          const usernameRegex = /^[a-zA-Z0-9_]+$/;
-          if (regUsername.length > 20 || !usernameRegex.test(regUsername)) {
-            ws.send(JSON.stringify({ type: "ERROR", message: "Invalid username format" }));
-            return;
-          }
-
-          if (regNickname.length < 1 || regNickname.length > 30) {
-            ws.send(JSON.stringify({ type: "ERROR", message: "Nickname must be between 1 and 30 characters" }));
-            return;
-          }
-
-          try {
-            const insert = db.prepare("INSERT INTO users (username, nickname, links, linker_avatar, linker_color) VALUES (?, ?, 0, '👾', 'pink')");
-            const info = insert.run(regUsername, regNickname);
-            const user = {
-              id: info.lastInsertRowid as number,
-              username: regUsername,
-              nickname: regNickname,
-              links: 0,
-              created_at: new Date().toISOString(),
-              linker_avatar: '👾',
-              linker_color: 'pink'
-            };
-
-            // Authenticate of course
-            authenticatedUser = regUsername;
-            clients.set(regUsername, ws);
-
-            ws.send(JSON.stringify({
-              type: "REGISTER_SUCCESS",
-              user
-            }));
-
-            // Sync user details
-            syncUserFullData(regUsername);
-          } catch (err: any) {
-            ws.send(JSON.stringify({ type: "ERROR", message: "Username is already taken" }));
-          }
+          // Legacy passwordless registration removed for security.
+          // Clients must use AUTH_REGISTER with a password.
+          ws.send(JSON.stringify({ type: "ERROR", message: "Passwordless registration is disabled. Please use AUTH_REGISTER with a password." }));
           break;
         }
 
         case "VERIFY_USER": {
-          const authUser = (data.username || "").toLowerCase().trim();
-          const userRow = db.prepare("SELECT * FROM users WHERE LOWER(username) = ?").get(authUser) as any;
-          if (userRow) {
-            authenticatedUser = userRow.username.toLowerCase();
-            clients.set(authenticatedUser, ws);
-            ws.send(JSON.stringify({
-              type: "VERIFY_USER_RESPONSE",
-              success: true,
-              user: {
-                id: userRow.id,
-                username: userRow.username,
-                nickname: userRow.nickname,
-                links: userRow.links,
-                created_at: userRow.created_at,
-                linker_avatar: userRow.linker_avatar || '👾',
-                linker_color: userRow.linker_color || 'pink'
-              }
-            }));
-
-            // Push fresh updates
-            syncUserFullData(authenticatedUser);
-          } else {
-            ws.send(JSON.stringify({
-              type: "VERIFY_USER_RESPONSE",
-              success: false
-            }));
-          }
+          // Legacy passwordless verify removed for security.
+          // Clients must use AUTH_VERIFY_SESSION or AUTH_LOGIN.
+          ws.send(JSON.stringify({
+            type: "VERIFY_USER_RESPONSE",
+            success: false
+          }));
           break;
         }
 
@@ -1017,7 +969,12 @@ wss.on("connection", (ws) => {
           const convId = parseInt(data.conversationId, 10);
           if (isNaN(convId)) return;
 
-          // Retrieve messages
+          // Verify user is a participant in this conversation
+          const histConv = db.prepare(
+            `SELECT id FROM conversations WHERE id = ? AND (LOWER(participant_1) = ? OR LOWER(participant_2) = ?)`
+          ).get(convId, authenticatedUser, authenticatedUser) as any;
+          if (!histConv) return;
+
           const msgs = db.prepare("SELECT * FROM messages WHERE conversation_id = ? ORDER BY sent_at ASC").all(convId) as any[];
           const histConv = db.prepare("SELECT phase, opener_initiator, opener_timer_choice FROM conversations WHERE id = ?").get(convId) as any;
           ws.send(JSON.stringify({
@@ -1095,7 +1052,9 @@ wss.on("connection", (ws) => {
           const convId = parseInt(data.conversationId, 10);
           if (isNaN(convId)) return;
 
-          const convRow = db.prepare("SELECT * FROM conversations WHERE id = ?").get(convId) as any;
+          const convRow = db.prepare(
+            `SELECT * FROM conversations WHERE id = ? AND (LOWER(participant_1) = ? OR LOWER(participant_2) = ?)`
+          ).get(convId, authenticatedUser, authenticatedUser) as any;
           if (convRow) {
             const partner = convRow.participant_1.toLowerCase() === authenticatedUser 
               ? convRow.participant_2.toLowerCase() 
@@ -1128,7 +1087,9 @@ wss.on("connection", (ws) => {
           const convId = parseInt(data.conversationId, 10);
           if (isNaN(convId)) return;
 
-          const convRow = db.prepare("SELECT * FROM conversations WHERE id = ?").get(convId) as any;
+          const convRow = db.prepare(
+            `SELECT * FROM conversations WHERE id = ? AND (LOWER(participant_1) = ? OR LOWER(participant_2) = ?)`
+          ).get(convId, authenticatedUser, authenticatedUser) as any;
           if (convRow) {
             // Calculate ending reward using log_1.2(x)
             const countRow = db.prepare("SELECT COUNT(*) as count FROM messages WHERE conversation_id = ?").get(convId) as any;

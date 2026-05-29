@@ -106,7 +106,10 @@ export async function handleApi(
   const url = new URL(request.url);
   const path = url.pathname;
   const method = request.method;
-  const secret = env.JWT_SECRET || "ephemeral";
+  const secret = env.JWT_SECRET;
+  if (!secret) {
+    return Response.json({ error: "Server misconfiguration: JWT_SECRET not set" }, { status: 500 });
+  }
 
   // ── VAPID public key ────────────────────────────────────────────────────
   if (path === "/api/vapid-public-key" && method === "GET") {
@@ -115,9 +118,16 @@ export async function handleApi(
 
   // ── Save push subscription ───────────────────────────────────────────────
   if (path === "/api/save-subscription" && method === "POST") {
-    const body = (await request.json()) as { username?: string; subscription?: unknown };
+    const body = (await request.json()) as { username?: string; subscription?: unknown; sessionToken?: string };
     if (!body.username)
       return Response.json({ error: "Username required" }, { status: 400 });
+    if (!body.sessionToken)
+      return Response.json({ error: "Authentication required" }, { status: 401 });
+    const userRow = await env.DB.prepare(
+      "SELECT id FROM users WHERE LOWER(username) = ? AND session_token = ?"
+    ).bind(body.username.toLowerCase(), body.sessionToken).first();
+    if (!userRow)
+      return Response.json({ error: "Invalid session" }, { status: 401 });
     await env.DB.prepare(
       "UPDATE users SET push_subscription = ? WHERE LOWER(username) = ?"
     )
@@ -191,6 +201,10 @@ export async function handleApi(
     const authUser = getAuthUser(request, secret);
     if (!authUser) return Response.json({ error: "missing bearer" }, { status: 401 });
     const id = Number(privacyMatch[1]);
+    const conv = await env.DB.prepare(
+      "SELECT id FROM conversations WHERE id = ? AND (LOWER(participant_1) = ? OR LOWER(participant_2) = ?)"
+    ).bind(id, authUser, authUser).first();
+    if (!conv) return Response.json({ error: "not a participant" }, { status: 403 });
     const { privacyMode, disappearAfterSeconds, anonymousMode } =
       (await request.json()) as any;
     const allowed = ["standard", "ephemeral", "anonymous", "incognito"];
@@ -210,7 +224,12 @@ export async function handleApi(
   if (screenshotMatch && method === "POST") {
     const authUser = getAuthUser(request, secret);
     if (!authUser) return Response.json({ error: "missing bearer" }, { status: 401 });
-    await track(env.DB, "privacy.screenshot", { id: Number(screenshotMatch[1]) }, authUser);
+    const screenshotId = Number(screenshotMatch[1]);
+    const conv = await env.DB.prepare(
+      "SELECT id FROM conversations WHERE id = ? AND (LOWER(participant_1) = ? OR LOWER(participant_2) = ?)"
+    ).bind(screenshotId, authUser, authUser).first();
+    if (!conv) return Response.json({ error: "not a participant" }, { status: 403 });
+    await track(env.DB, "privacy.screenshot", { id: screenshotId }, authUser);
     return Response.json({ ok: true });
   }
 
@@ -291,6 +310,10 @@ export async function handleApi(
     const authUser = getAuthUser(request, secret);
     if (!authUser) return Response.json({ error: "missing bearer" }, { status: 401 });
     const id = Number(circleMemMatch[1]);
+    const circle = await env.DB.prepare(
+      "SELECT id FROM circles WHERE id = ? AND owner_username = ?"
+    ).bind(id, authUser).first();
+    if (!circle) return Response.json({ error: "not circle owner" }, { status: 403 });
     const { username } = (await request.json()) as any;
     if (!username) return Response.json({ error: "username required" }, { status: 400 });
     try {
@@ -360,9 +383,11 @@ export async function handleApi(
 
   // POST /api/v15/analytics
   if (v15path === "/analytics" && method === "POST") {
-    const { event, props, username } = (await request.json()) as any;
+    const authUser = getAuthUser(request, secret);
+    if (!authUser) return Response.json({ error: "missing bearer" }, { status: 401 });
+    const { event, props } = (await request.json()) as any;
     if (!event) return Response.json({ error: "event required" }, { status: 400 });
-    await track(env.DB, String(event), props || {}, username || null);
+    await track(env.DB, String(event), props || {}, authUser);
     return Response.json({ ok: true });
   }
 
