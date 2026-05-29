@@ -699,6 +699,58 @@ export class ChatRoom {
         break;
       }
 
+      // ── Find-or-create conversation for an accepted friendship ───────────
+      // Handles: first chat ever, and re-opening after the 60s delete window.
+      case "START_CONVERSATION": {
+        if (!authedUser) return;
+        const target = (data.targetUsername || "").toLowerCase().trim();
+        if (!target) return;
+
+        // Must be actual friends
+        const friendship = await db
+          .prepare(`
+            SELECT id FROM friendships
+            WHERE ((LOWER(requester_username) = ? AND LOWER(receiver_username) = ?)
+                OR (LOWER(requester_username) = ? AND LOWER(receiver_username) = ?))
+            AND status = 'accepted'
+          `)
+          .bind(authedUser, target, target, authedUser)
+          .first<any>();
+        if (!friendship) return;
+
+        // Find or create the conversation row
+        let conv = await db
+          .prepare(`
+            SELECT * FROM conversations
+            WHERE (LOWER(participant_1) = ? AND LOWER(participant_2) = ?)
+               OR (LOWER(participant_1) = ? AND LOWER(participant_2) = ?)
+          `)
+          .bind(authedUser, target, target, authedUser)
+          .first<any>();
+
+        if (!conv) {
+          await db
+            .prepare(`
+              INSERT INTO conversations (participant_1, participant_2, started_at, conversation_started, saved)
+              VALUES (?, ?, CURRENT_TIMESTAMP, 0, 0)
+            `)
+            .bind(authedUser, target)
+            .run();
+          conv = await db
+            .prepare(`
+              SELECT * FROM conversations
+              WHERE (LOWER(participant_1) = ? AND LOWER(participant_2) = ?)
+                 OR (LOWER(participant_1) = ? AND LOWER(participant_2) = ?)
+            `)
+            .bind(authedUser, target, target, authedUser)
+            .first<any>();
+        }
+
+        ws.send(JSON.stringify({ type: "CONVERSATION_READY", conversationId: conv!.id }));
+        await Promise.all([this.syncUser(authedUser), this.syncUser(target)]);
+        break;
+      }
+
       // ── Decline friend request ────────────────────────────────────────────
       case "FRIEND_DECLINE": {
         if (!authedUser) return;

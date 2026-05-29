@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { ThemeProvider, useTheme } from "./components/ThemeContext";
 import { WelcomeScreen } from "./components/WelcomeScreen";
 import { LoginScreen } from "./components/LoginScreen";
@@ -124,6 +124,9 @@ function MainApp() {
   const [ignoredUsers, setIgnoredUsers] = useState<IgnoredUser[]>([]);
   const [activeChatFriend, setActiveChatFriend] = useState<{ username: string; nickname: string; links: number; linker_avatar?: string; linker_color?: string } | null>(null);
   const [activeConversationId, setActiveConversationId] = useState<number | null>(null);
+  // Held while waiting for CONVERSATION_READY (START_CONVERSATION flow).
+  // Use a ref so the WS closure always reads the latest value without re-subscribing.
+  const pendingChatFriendRef = useRef<{ username: string; nickname: string; links: number; linker_avatar?: string; linker_color?: string } | null>(null);
 
   // Link burst animation trigger overlays
   const [rewardBurst, setRewardBurst] = useState<{ amount: number; reason: string } | null>(null);
@@ -256,6 +259,18 @@ function MainApp() {
           setActiveChatFriend(null);
           setActiveConversationId(null);
           break;
+
+        case "CONVERSATION_READY": {
+          // Server found/created a conversation row for a START_CONVERSATION request.
+          const friend = pendingChatFriendRef.current;
+          if (friend && typeof data.conversationId === "number") {
+            pendingChatFriendRef.current = null;
+            setActiveChatFriend(friend);
+            setActiveConversationId(data.conversationId);
+            setView("chat");
+          }
+          break;
+        }
 
         case "LINKS_EARNED":
           // Update user's link count
@@ -448,9 +463,17 @@ function MainApp() {
           savedConversations={savedConversations}
           lastMessages={lastMessages}
           onStartNewConversation={(friend, convId) => {
-            setActiveChatFriend(friend);
-            setActiveConversationId(convId);
-            setView("chat");
+            if (convId) {
+              // Existing conversation row — navigate directly.
+              setActiveChatFriend(friend);
+              setActiveConversationId(convId);
+              setView("chat");
+            } else {
+              // No conversation row yet (deleted after expiry).
+              // Ask the server to find-or-create one, then navigate on CONVERSATION_READY.
+              pendingChatFriendRef.current = friend;
+              wsService.send({ type: "START_CONVERSATION", targetUsername: friend.username });
+            }
           }}
           onOpenSavedChat={(saved) => {
             setActiveChatFriend({

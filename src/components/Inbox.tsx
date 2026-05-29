@@ -21,7 +21,7 @@ interface InboxProps {
   discoverUsers: { username: string; nickname: string; links: number; linker_avatar?: string; linker_color?: string }[];
   savedConversations: SavedConversation[];
   lastMessages: Record<number, { content: string; sender: string; is_photo: number; sent_at: number }>;
-  onStartNewConversation: (friend: FriendInfo, conversationId: number) => void;
+  onStartNewConversation: (friend: FriendInfo, conversationId: number | null) => void;
   onOpenSavedChat: (saved: SavedConversation) => void;
   onOpenSavedConversations?: (friend: FriendInfo) => void;
   onOpenSettings: () => void;
@@ -445,7 +445,7 @@ export const Inbox: React.FC<InboxProps> = ({
                           /* ── LIVE CONVERSATION PANEL ── */
                           <motion.button
                             whileTap={{ scale: 0.98 }}
-                            onClick={() => { if (convId) onStartNewConversation(friend, convId); }}
+                            onClick={() => { onStartNewConversation(friend, convId); }}
                             className="w-full h-[52px] rounded-2xl border theme-border bg-zinc-50 dark:bg-zinc-900/60
                               flex flex-col justify-between overflow-hidden cursor-pointer
                               hover:bg-zinc-100 dark:hover:bg-zinc-800/80 transition-colors"
@@ -491,7 +491,7 @@ export const Inbox: React.FC<InboxProps> = ({
                           /* ── NEW CHAT BUTTON ── */
                           <motion.button
                             whileTap={{ scale: 0.95 }}
-                            onClick={() => { if (convId) onStartNewConversation(friend, convId); }}
+                            onClick={() => { onStartNewConversation(friend, convId); }}
                             className="w-full h-[52px] flex items-center justify-center gap-2 rounded-2xl
                               bg-gradient-to-r from-[#FE2C55] to-[#a855f7]
                               text-white font-black text-[11px] uppercase tracking-widest

@@ -942,6 +942,48 @@ wss.on("connection", (ws) => {
           break;
         }
 
+        // Creates (or re-opens) a conversation row for an existing friendship.
+        // Called when the user taps NEW CHAT and no conversation row exists
+        // (e.g. after the 60-second delete window expired a previous chat).
+        case "START_CONVERSATION": {
+          if (!authenticatedUser) return;
+          const target = (data.targetUsername || "").toLowerCase().trim();
+          if (!target) return;
+
+          // Must be actual friends
+          const friendship = db.prepare(`
+            SELECT id FROM friendships
+            WHERE ((LOWER(requester_username) = ? AND LOWER(receiver_username) = ?)
+                OR (LOWER(requester_username) = ? AND LOWER(receiver_username) = ?))
+            AND status = 'accepted'
+          `).get(authenticatedUser, target, target, authenticatedUser);
+          if (!friendship) return;
+
+          // Find or create the conversation row
+          let conv = db.prepare(`
+            SELECT * FROM conversations
+            WHERE (LOWER(participant_1) = ? AND LOWER(participant_2) = ?)
+               OR (LOWER(participant_1) = ? AND LOWER(participant_2) = ?)
+          `).get(authenticatedUser, target, target, authenticatedUser) as any;
+
+          if (!conv) {
+            db.prepare(`
+              INSERT INTO conversations (participant_1, participant_2, started_at, conversation_started, saved)
+              VALUES (?, ?, CURRENT_TIMESTAMP, 0, 0)
+            `).run(authenticatedUser, target);
+            conv = db.prepare(`
+              SELECT * FROM conversations
+              WHERE (LOWER(participant_1) = ? AND LOWER(participant_2) = ?)
+                 OR (LOWER(participant_1) = ? AND LOWER(participant_2) = ?)
+            `).get(authenticatedUser, target, target, authenticatedUser) as any;
+          }
+
+          ws.send(JSON.stringify({ type: "CONVERSATION_READY", conversationId: conv.id }));
+          syncUserFullData(authenticatedUser);
+          syncUserFullData(target);
+          break;
+        }
+
         case "FRIEND_DECLINE": {
           if (!authenticatedUser) return;
           const reqUser = (data.requesterUsername || "").toLowerCase().trim();
