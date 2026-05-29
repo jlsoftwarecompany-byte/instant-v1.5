@@ -351,7 +351,8 @@ function archiveChat(convId: number) {
   if (!convRow) return;
 
   const now = Date.now();
-  db.prepare("DELETE FROM messages WHERE conversation_id = ?").run(convId);
+  // Keep messages as archive snapshots (mark expired but do NOT delete)
+  db.prepare("UPDATE messages SET expired = 1 WHERE conversation_id = ?").run(convId);
   db.prepare("DELETE FROM timers WHERE conversation_id = ?").run(convId);
   db.prepare(
     "UPDATE conversations SET archived = 1, archived_at = ?, phase = 'awaiting_response', opener_initiator = NULL, opener_timer_choice = NULL WHERE id = ?"
@@ -1122,8 +1123,9 @@ wss.on("connection", (ws) => {
           }
 
           db.prepare("UPDATE users SET links = links - ? WHERE LOWER(username) = ?").run(REVIVE_COST, authenticatedUser);
+          // Keep archived_at — it marks the snapshot boundary (messages before it are the previous round)
           db.prepare(
-            "UPDATE conversations SET archived = 0, archived_at = NULL, phase = 'awaiting_response', opener_initiator = NULL, opener_timer_choice = NULL WHERE id = ?"
+            "UPDATE conversations SET archived = 0, phase = 'awaiting_response', opener_initiator = NULL, opener_timer_choice = NULL WHERE id = ?"
           ).run(convId);
 
           const newLinks = (db.prepare("SELECT links FROM users WHERE LOWER(username) = ?").get(authenticatedUser) as any).links;

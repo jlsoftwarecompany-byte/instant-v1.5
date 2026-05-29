@@ -3,7 +3,7 @@ import { Message, TimerState, User } from "../types";
 import { wsService } from "../lib/ws";
 import {
   Send, ChevronLeft, Clock, ShieldAlert, Image as ImageIcon, Camera,
-  Download, Sparkles, Check, Loader2, Star
+  Download, Sparkles, Check, Loader2, Star, RotateCcw, Archive
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { MessageBubble } from "./MessageBubble";
@@ -16,12 +16,15 @@ interface ChatProps {
   conversationId: number;
   initialTimers: TimerState[];
   initialSaved: boolean;
+  initialArchived: boolean;
+  initialArchivedAt: number | null;
   onBack: () => void;
   onLinksRewardTriggered: (amount: number, reason: string) => void;
 }
 
-export const Chat: React.FC<ChatProps> = ({ 
-  currentUser, contact, conversationId, initialTimers, initialSaved, onBack, onLinksRewardTriggered 
+export const Chat: React.FC<ChatProps> = ({
+  currentUser, contact, conversationId, initialTimers, initialSaved,
+  initialArchived, initialArchivedAt, onBack, onLinksRewardTriggered
 }) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState("");
@@ -49,6 +52,12 @@ export const Chat: React.FC<ChatProps> = ({
   const [conversationPhase, setConversationPhase] = useState<"awaiting_response" | "active">("awaiting_response");
   const [openerInitiator, setOpenerInitiator] = useState<string | null>(null);
   const [openerTimerChoice, setOpenerTimerChoice] = useState<number | null>(null);
+
+  // Archive / Revival state
+  const [isArchived, setIsArchived] = useState<boolean>(initialArchived);
+  const [archivedAt, setArchivedAt] = useState<number | null>(initialArchivedAt);
+  const [reviveError, setReviveError] = useState<string | null>(null);
+  const [isReviving, setIsReviving] = useState(false);
 
   // Feedback Toast
   const [feedbackToast, setFeedbackToast] = useState<string>("");
@@ -123,19 +132,32 @@ export const Chat: React.FC<ChatProps> = ({
 
         case "CHAT_DELETED":
           if (data.conversationId === conversationId) {
-            // A normal message went unanswered — the chat was permanently wiped.
-            // If we're mid-detonation, let the explosion animation finish and let
-            // the detonation effect handle the wipe; otherwise clear immediately.
+            // Chat archived — messages preserved as snapshots.
             setActiveTimer(null);
             setConversationPhase("awaiting_response");
             setOpenerInitiator(null);
             setOpenerTimerChoice(null);
             if (!detonatingRef.current) {
-              setMessages([]);
-              messageVisibilityRef.current.clear();
-              triggerToast("Chat expired — messages were permanently deleted");
+              // Exploded server-side (while not actively watching)
+              triggerToast("💥 Chat exploded — tap Revive to bring it back");
             }
+            // isArchived / archivedAt will be set by the following FRIEND_UPDATE
           }
+          break;
+
+        case "REVIVE_SUCCESS":
+          if (data.conversationId === conversationId) {
+            setIsReviving(false);
+            setReviveError(null);
+            setIsArchived(false);
+            // archivedAt stays set — marks snapshot boundary for history divider
+            triggerToast("✨ Chat revived! Send an opener to restart.");
+          }
+          break;
+
+        case "REVIVE_FAILED":
+          setIsReviving(false);
+          setReviveError(data.reason || "Revival failed");
           break;
 
         case "MESSAGE_SEEN_BROADCAST":
@@ -165,6 +187,8 @@ export const Chat: React.FC<ChatProps> = ({
             if (conv.phase) setConversationPhase(conv.phase);
             setOpenerInitiator(conv.opener_initiator ? String(conv.opener_initiator).toLowerCase() : null);
             setOpenerTimerChoice(conv.opener_timer_choice ?? null);
+            setIsArchived(!!conv.archived);
+            if (conv.archived_at != null) setArchivedAt(conv.archived_at);
           }
           break;
         }
@@ -237,11 +261,13 @@ export const Chat: React.FC<ChatProps> = ({
   }, [activeTimer]);
 
   // Hot potato: once detonation starts, let every bubble play its explosion
-  // (~600ms) then wipe the conversation locally and reset to the opener phase.
+  // (~600ms) then mark messages as snapshots but keep them — archived_at and
+  // isArchived will arrive via the following FRIEND_UPDATE.
   useEffect(() => {
     if (!detonating) return;
     const t = setTimeout(() => {
-      setMessages([]);
+      // Keep messages — they become archive snapshots, not deleted
+      setMessages(prev => prev.map(m => ({ ...m, expired: 1 })));
       messageVisibilityRef.current.clear();
       setConversationPhase("awaiting_response");
       setOpenerInitiator(null);
@@ -428,6 +454,18 @@ export const Chat: React.FC<ChatProps> = ({
   const contactAvatar = contact.linker_avatar || "👾";
   const contactColor = contact.linker_color || "pink";
 
+  // Revive the archived conversation (costs 3 links)
+  const handleRevive = () => {
+    if (isReviving) return;
+    setIsReviving(true);
+    setReviveError(null);
+    wsService.send({ type: "REVIVE_CONVERSATION", conversationId });
+  };
+
+  // Messages from before the last archive are "previous round" snapshots
+  const isSnapshotMessage = (msg: Message) =>
+    archivedAt != null && msg.sent_at <= archivedAt;
+
   return (
     <div className="fixed inset-0 flex flex-col bg-[var(--background)] font-sans overflow-hidden">
       
@@ -471,6 +509,11 @@ export const Chat: React.FC<ChatProps> = ({
           <div>
             <h2 className="font-extrabold text-sm tracking-tight theme-text-primary flex items-center gap-1.5 uppercase leading-none">
               {contact.nickname}
+              {isArchived && (
+                <span className="text-[8px] px-1.5 py-0.5 bg-zinc-500/15 border border-zinc-500/20 text-zinc-400 rounded font-black tracking-wide">
+                  💥 EXPLODED
+                </span>
+              )}
             </h2>
             <div className="flex items-center gap-1.5 mt-1">
               <span className="text-[10px] text-zinc-400 font-bold">@{contact.username}</span>
@@ -481,11 +524,61 @@ export const Chat: React.FC<ChatProps> = ({
           </div>
         </div>
 
+        {/* Archive icon: shown when this conversation has a previous round */}
+        {archivedAt != null && !isArchived && (
+          <div className="flex items-center gap-1 pr-1">
+            <Archive className="w-4 h-4 text-zinc-500" />
+            <span className="text-[9px] text-zinc-500 font-bold uppercase tracking-wide">History</span>
+          </div>
+        )}
+
       </header>
 
       {/* Message List area */}
       <div className="flex-1 overflow-y-auto px-3 sm:px-5 py-4 space-y-3 sm:space-y-4">
-        {messages.length === 0 ? (
+
+        {/* ── Archived state: revive banner ─────────────────────────────── */}
+        {isArchived && (
+          <div className="mx-auto max-w-xs text-center space-y-3 pt-4">
+            <div className="text-4xl select-none">💥</div>
+            <p className="text-sm font-bold text-zinc-300">This chat exploded</p>
+            <p className="text-xs text-zinc-500 leading-relaxed">
+              Scroll down to read the last messages. Revive to send a new opener.
+            </p>
+            {reviveError && (
+              <p className="text-xs text-rose-400 font-semibold">{reviveError}</p>
+            )}
+            <button
+              onClick={handleRevive}
+              disabled={isReviving || currentUser.links < 3}
+              className={`w-full py-3 rounded-2xl font-black text-sm flex items-center justify-center gap-2 transition active:scale-95
+                ${currentUser.links >= 3
+                  ? "bg-gradient-to-r from-[#7c3aed] to-[#f472b6] text-white shadow-lg hover:opacity-90"
+                  : "bg-zinc-800 text-zinc-500 cursor-not-allowed border border-zinc-700"
+                }`}
+            >
+              <RotateCcw className={`w-4 h-4 ${isReviving ? "animate-spin" : ""}`} />
+              {isReviving ? "Reviving…" : `Revive · 3 ⭐ links`}
+            </button>
+            <p className="text-[10px] text-zinc-600">Your balance: {currentUser.links} ⭐ links</p>
+            <div className="border-t border-zinc-800 pt-4 mt-2">
+              <p className="text-[10px] font-bold tracking-widest text-zinc-600 uppercase">— last messages —</p>
+            </div>
+          </div>
+        )}
+
+        {/* ── History divider: between previous round and current round ── */}
+        {!isArchived && archivedAt != null && messages.some(m => m.sent_at <= archivedAt!) && messages.some(m => m.sent_at > archivedAt!) && (
+          <div className="flex items-center gap-2 py-1">
+            <div className="flex-1 h-px bg-zinc-800" />
+            <span className="text-[9px] font-bold tracking-widest text-zinc-500 uppercase flex items-center gap-1">
+              <Archive className="w-3 h-3" /> previous round
+            </span>
+            <div className="flex-1 h-px bg-zinc-800" />
+          </div>
+        )}
+
+        {messages.length === 0 && !isArchived ? (
           <div className="flex flex-col items-center justify-center text-center h-full max-w-xs mx-auto space-y-3">
             <div className="w-10 h-10 rounded-full bg-zinc-100 dark:bg-zinc-900/65 flex items-center justify-center text-zinc-400">
               <Clock className="w-5 h-5 text-pink-500 animate-pulse" />
@@ -497,7 +590,12 @@ export const Chat: React.FC<ChatProps> = ({
             </p>
           </div>
         ) : (
-          messages.map((m, idx) => (
+          messages.map((m, idx) => {
+            const snap = isSnapshotMessage(m) || isArchived;
+            // For active chats, the "latest" is the last non-snapshot message
+            const activeMessages = isArchived ? [] : messages.filter(msg => !isSnapshotMessage(msg));
+            const isLatestActive = !snap && m.id === activeMessages[activeMessages.length - 1]?.id;
+            return (
             <MessageBubble
               key={m.id || idx}
               message={m}
@@ -506,22 +604,40 @@ export const Chat: React.FC<ChatProps> = ({
               saveStatus={saveStatus}
               contactAvatar={contactAvatar}
               onClickPhoto={setViewerPhoto}
-              // Hot potato: only the latest message runs/shows its countdown;
-              // earlier messages are frozen (timer paused & hidden). When the
-              // chat detonates, every bubble explodes at once.
-              isLatest={idx === messages.length - 1}
+              isLatest={snap ? false : (isArchived ? idx === messages.length - 1 : isLatestActive)}
               forceExplode={detonating}
+              isSnapshot={snap}
               onExplodeComplete={(msgId) => {
                 setMessages(prev => prev.map(msg => msg.id === msgId ? { ...msg, expired: 1 } : msg));
               }}
             />
-          ))
+            );
+          })
         )}
         <div ref={messagesEndRef} />
       </div>
 
+      {/* Archived: hide composer, show revive footer instead */}
+      {isArchived && (
+        <div className="p-4 border-t border-zinc-800 bg-[var(--background)] sticky bottom-0 z-40 flex items-center justify-between gap-3">
+          <span className="text-xs text-zinc-500 font-semibold">Revive to send messages</span>
+          <button
+            onClick={handleRevive}
+            disabled={isReviving || currentUser.links < 3}
+            className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-black transition active:scale-95 shrink-0
+              ${currentUser.links >= 3
+                ? "bg-gradient-to-r from-[#7c3aed] to-[#f472b6] text-white shadow-md hover:opacity-90"
+                : "bg-zinc-800 text-zinc-500 cursor-not-allowed border border-zinc-700"
+              }`}
+          >
+            <RotateCcw className={`w-3.5 h-3.5 ${isReviving ? "animate-spin" : ""}`} />
+            Revive · 3⭐
+          </button>
+        </div>
+      )}
+
       {/* Initiator is locked out until their opener gets a response */}
-      {saveStatus !== "saved" && isWaitingForResponse && (
+      {!isArchived && saveStatus !== "saved" && isWaitingForResponse && (
         <div className="p-4 border-t theme-border bg-[var(--background)] sticky bottom-0 z-40">
           <div className="flex items-center justify-center gap-2 px-4 py-3 rounded-2xl border border-amber-500/20 bg-amber-500/5 text-amber-500">
             <Clock className="w-4 h-4 animate-pulse shrink-0" />
@@ -533,7 +649,7 @@ export const Chat: React.FC<ChatProps> = ({
       )}
 
       {/* Bottom Message Composer */}
-      {saveStatus !== "saved" && !isWaitingForResponse && (
+      {!isArchived && saveStatus !== "saved" && !isWaitingForResponse && (
         <form onSubmit={handleSendMessage} className="p-3 border-t theme-border bg-[var(--background)] sticky bottom-0 z-40 overflow-x-hidden">
 
           {/* Responder hint while answering an opener */}

@@ -413,6 +413,8 @@ function MainApp() {
           conversationId={activeConversationId}
           initialTimers={timers}
           initialSaved={conversations.find(c => c.id === activeConversationId)?.saved === 1}
+          initialArchived={conversations.find(c => c.id === activeConversationId)?.archived === 1}
+          initialArchivedAt={conversations.find(c => c.id === activeConversationId)?.archived_at ?? null}
           onBack={() => {
             setView("inbox");
             setActiveChatFriend(null);

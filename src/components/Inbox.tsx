@@ -4,7 +4,7 @@ import { wsService } from "../lib/ws";
 import { 
   Plus, Settings, User as UserIcon, Star, MessageSquarePlus,
   Send, UserX, UserCheck, AlertCircle, Sparkles, MessageCircle, ArrowRight,
-  Clock, Archive, RotateCcw, X, Flame
+  Clock
 } from "lucide-react";
 import { useTheme } from "./ThemeContext";
 import { motion, AnimatePresence } from "motion/react";
@@ -38,13 +38,8 @@ export const Inbox: React.FC<InboxProps> = ({
 }) => {
   const { theme } = useTheme();
 
-  // Archive panel state
-  const [showArchive, setShowArchive] = useState(false);
-  const [reviveError, setReviveError] = useState<string | null>(null);
-
-  // Split active vs archived conversations
-  const activeConversations = (activeConversationsRaw || []).filter(c => !c.archived);
-  const archivedConversations = (activeConversationsRaw || []).filter(c => c.archived === 1);
+  // All conversations (active + archived shown inline)
+  const activeConversations = activeConversationsRaw || [];
 
   // Add friend states
   const [showAddFriendModal, setShowAddFriendModal] = useState(false);
@@ -156,134 +151,8 @@ export const Inbox: React.FC<InboxProps> = ({
     return conv ? conv.id : null;
   };
 
-  // Revive an archived conversation (costs 3 links)
-  const handleRevive = (conversationId: number) => {
-    setReviveError(null);
-    const cleanup = wsService.registerListener((data: any) => {
-      if (data.type === "REVIVE_SUCCESS" && data.conversationId === conversationId) {
-        cleanup();
-        setReviveError(null);
-      } else if (data.type === "REVIVE_FAILED") {
-        cleanup();
-        setReviveError(data.reason || "Revival failed");
-      }
-    });
-    wsService.send({ type: "REVIVE_CONVERSATION", conversationId });
-  };
-
-  // Get the partner username from an archived conversation
-  const getArchivePartner = (conv: { participant_1: string; participant_2: string }) => {
-    return conv.participant_1.toLowerCase() === currentUser.username
-      ? conv.participant_2
-      : conv.participant_1;
-  };
-
   return (
     <div className="flex flex-col min-h-screen bg-[var(--background)] font-sans">
-
-      {/* ── Archive panel (full-screen overlay) ─────────────────────────── */}
-      <AnimatePresence>
-        {showArchive && (
-          <motion.div
-            key="archive-panel"
-            initial={{ opacity: 0, y: "100%" }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: "100%" }}
-            transition={{ type: "spring", stiffness: 380, damping: 36 }}
-            className="fixed inset-0 z-50 flex flex-col bg-[var(--background)]"
-          >
-            {/* Archive header */}
-            <div className="px-6 pt-[calc(env(safe-area-inset-top)+16px)] pb-4 bg-gradient-to-r from-[#7c3aed] via-[#a855f7] to-[#f472b6] flex items-center justify-between shadow-lg shrink-0">
-              <div className="flex items-center gap-3">
-                <Archive className="w-5 h-5 text-white/80" />
-                <div>
-                  <h2 className="text-lg font-black text-white leading-none">Archived</h2>
-                  <p className="text-[11px] text-white/70 font-semibold mt-0.5">Revive for 3 ⭐ links each</p>
-                </div>
-              </div>
-              <button
-                onClick={() => { setShowArchive(false); setReviveError(null); }}
-                className="w-9 h-9 flex items-center justify-center bg-white/15 hover:bg-white/25 rounded-full text-white transition active:scale-95"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Archive list */}
-            <div className="flex-1 overflow-y-auto">
-              {reviveError && (
-                <div className="mx-4 mt-4 px-4 py-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-400 text-sm font-semibold flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4 shrink-0" /> {reviveError}
-                </div>
-              )}
-              {archivedConversations.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-64 gap-3 px-6 text-center">
-                  <div className="w-14 h-14 rounded-full bg-purple-500/10 flex items-center justify-center">
-                    <Archive className="w-6 h-6 text-purple-400" />
-                  </div>
-                  <p className="text-sm font-bold theme-text-primary">No archived chats</p>
-                  <p className="text-xs text-zinc-400 leading-relaxed max-w-[220px]">
-                    When a chat explodes it will appear here. Revive it to send a new opener.
-                  </p>
-                </div>
-              ) : (
-                <div className="divide-y theme-border">
-                  {archivedConversations.map(conv => {
-                    const partnerUsername = getArchivePartner(conv);
-                    const partnerInfo = allUsersMap[partnerUsername.toLowerCase()] || { nickname: partnerUsername, links: 0, linker_avatar: "👾", linker_color: "pink" };
-                    const canRevive = currentUser.links >= 3;
-                    return (
-                      <motion.div
-                        key={conv.id}
-                        initial={{ opacity: 0, x: -10 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        className="p-5 flex items-center justify-between gap-3"
-                      >
-                        <div className="flex items-center gap-3.5">
-                          {/* Greyed-out avatar to signal archived state */}
-                          <div className="w-12 h-12 rounded-2xl flex items-center justify-center text-2xl shrink-0 bg-zinc-700/40 border border-zinc-600/30 grayscale opacity-60 select-none">
-                            {partnerInfo.linker_avatar || "👾"}
-                          </div>
-                          <div>
-                            <h3 className="font-extrabold text-sm theme-text-primary uppercase leading-none flex items-center gap-1.5">
-                              {partnerInfo.nickname}
-                              <span className="text-[8px] px-1.5 py-0.5 bg-zinc-500/10 border border-zinc-500/20 text-zinc-400 rounded-sm font-black tracking-wide uppercase">
-                                💥 Exploded
-                              </span>
-                            </h3>
-                            <p className="text-xs text-zinc-500 mt-1">@{partnerUsername}</p>
-                          </div>
-                        </div>
-
-                        <button
-                          onClick={() => handleRevive(conv.id)}
-                          disabled={!canRevive}
-                          className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-black transition active:scale-95 shrink-0
-                            ${canRevive
-                              ? "bg-gradient-to-r from-[#7c3aed] to-[#f472b6] text-white shadow-md hover:opacity-90"
-                              : "bg-zinc-800 text-zinc-500 cursor-not-allowed border border-zinc-700"
-                            }`}
-                          title={canRevive ? "Revive this chat" : "Not enough links"}
-                        >
-                          <RotateCcw className="w-3.5 h-3.5" />
-                          Revive · 3⭐
-                        </button>
-                      </motion.div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-
-            {/* Links balance footer */}
-            <div className="px-6 py-4 border-t theme-border shrink-0">
-              <p className="text-xs text-center text-zinc-400 font-semibold">
-                Your balance: <span className="text-amber-400 font-black">⭐ {currentUser.links} links</span>
-              </p>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
       {/* Top Header navbar — purple→pink gradient brand bar */}
       <header className="px-6 py-5 pt-[calc(env(safe-area-inset-top)+20px)] bg-gradient-to-r from-[#7c3aed] via-[#a855f7] to-[#f472b6] sticky top-0 z-40 flex items-center justify-between shadow-lg">
@@ -293,24 +162,12 @@ export const Inbox: React.FC<InboxProps> = ({
             instant<span className="text-white/90">.</span>
           </h1>
           <p className="text-[11px] text-white/70 font-semibold mt-1 leading-none">
-            {friendsList.length === 0 ? "All quiet" : `${friendsList.length} active`}
+            {friendsList.length === 0 ? "All quiet" : `${friendsList.length} chats`}
           </p>
         </div>
 
         {/* Global actions bar */}
         <div className="flex items-center gap-1.5">
-          <button
-            onClick={() => setShowArchive(true)}
-            className="w-10 h-10 flex items-center justify-center bg-white/15 hover:bg-white/25 rounded-full text-white transition active:scale-95 relative"
-            title="Archived chats"
-          >
-            <Archive className="w-5 h-5" />
-            {archivedConversations.length > 0 && (
-              <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-white text-purple-700 rounded-full text-[9px] font-black flex items-center justify-center leading-none">
-                {archivedConversations.length}
-              </span>
-            )}
-          </button>
           <button
             onClick={() => setShowAddFriendModal(true)}
             className="w-10 h-10 flex items-center justify-center bg-white/15 hover:bg-white/25 rounded-full text-white transition active:scale-95"
@@ -364,6 +221,7 @@ export const Inbox: React.FC<InboxProps> = ({
                   const hasTimer = convId ? getConversationTimerText(convId) : null;
                   const conversation = activeConversations.find(c => c.id === convId);
                   const isSaved = conversation?.saved === 1;
+                  const isRowArchived = conversation?.archived === 1;
 
                   // Two-phase opener status (Prompt 1)
                   const phase = conversation?.phase || "awaiting_response";
@@ -371,8 +229,8 @@ export const Inbox: React.FC<InboxProps> = ({
                     ? String(conversation.opener_initiator).toLowerCase()
                     : null;
                   const iAmInitiator = !!openerInit && openerInit === currentUser.username;
-                  const showAwaiting = !isSaved && phase === "awaiting_response" && !!openerInit && iAmInitiator;
-                  const showRespond = !isSaved && phase === "awaiting_response" && !!openerInit && !iAmInitiator;
+                  const showAwaiting = !isSaved && !isRowArchived && phase === "awaiting_response" && !!openerInit && iAmInitiator;
+                  const showRespond = !isSaved && !isRowArchived && phase === "awaiting_response" && !!openerInit && !iAmInitiator;
 
                   return (
                     <motion.div
@@ -384,17 +242,20 @@ export const Inbox: React.FC<InboxProps> = ({
                       whileHover={{ scale: 1.01, x: 2, backgroundColor: theme === "black" ? "#140e2b" : "#fbf8ff" }}
                       whileTap={{ scale: 0.995 }}
                       onClick={() => convId && onOpenChat(friend, convId)}
-                      className="p-5 flex items-center justify-between cursor-pointer transition-colors"
+                      className={`p-5 flex items-center justify-between cursor-pointer transition-colors ${isRowArchived ? "opacity-60" : ""}`}
                     >
                       <div className="flex items-center gap-3.5">
-                        <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-2xl shrink-0 select-none shadow-lg text-white
-                          ${(friend.linker_color || 'pink') === 'pink' ? 'bg-gradient-to-br from-[#FE2C55] to-[#a855f7]' : ''}
-                          ${(friend.linker_color || 'pink') === 'cyan' ? 'bg-gradient-to-br from-[#25F4EE] to-[#3b82f6]' : ''}
-                          ${(friend.linker_color || 'pink') === 'purple' ? 'bg-gradient-to-br from-[#a855f7] to-[#FE2C55]' : ''}
-                          ${(friend.linker_color || 'pink') === 'gold' ? 'bg-gradient-to-br from-[#eab308] to-[#FE2C55]' : ''}
-                          ${(friend.linker_color || 'pink') === 'green' ? 'bg-gradient-to-br from-[#22c55e] to-[#25F4EE]' : ''}
-                          ${(friend.linker_color || 'pink') === 'blue' ? 'bg-gradient-to-br from-[#3b82f6] to-[#a855f7]' : ''}
-                        `}>
+                        <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-2xl shrink-0 select-none shadow-lg
+                          ${isRowArchived
+                            ? "bg-zinc-700/40 border border-zinc-600/30 grayscale text-zinc-400"
+                            : `text-white
+                              ${(friend.linker_color || 'pink') === 'pink' ? 'bg-gradient-to-br from-[#FE2C55] to-[#a855f7]' : ''}
+                              ${(friend.linker_color || 'pink') === 'cyan' ? 'bg-gradient-to-br from-[#25F4EE] to-[#3b82f6]' : ''}
+                              ${(friend.linker_color || 'pink') === 'purple' ? 'bg-gradient-to-br from-[#a855f7] to-[#FE2C55]' : ''}
+                              ${(friend.linker_color || 'pink') === 'gold' ? 'bg-gradient-to-br from-[#eab308] to-[#FE2C55]' : ''}
+                              ${(friend.linker_color || 'pink') === 'green' ? 'bg-gradient-to-br from-[#22c55e] to-[#25F4EE]' : ''}
+                              ${(friend.linker_color || 'pink') === 'blue' ? 'bg-gradient-to-br from-[#3b82f6] to-[#a855f7]' : ''}`
+                          }`}>
                           {friend.linker_avatar || "👾"}
                         </div>
 
@@ -404,6 +265,11 @@ export const Inbox: React.FC<InboxProps> = ({
                             {isSaved && (
                               <span className="text-[8px] px-1.5 py-0.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 rounded-sm font-black tracking-wide uppercase">
                                 Saved
+                              </span>
+                            )}
+                            {isRowArchived && (
+                              <span className="text-[8px] px-1.5 py-0.5 bg-zinc-500/10 border border-zinc-500/20 text-zinc-500 rounded-sm font-black tracking-wide uppercase">
+                                💥 Exploded
                               </span>
                             )}
                           </h3>
@@ -417,17 +283,22 @@ export const Inbox: React.FC<InboxProps> = ({
                       </div>
 
                       <div className="flex items-center gap-3">
-                        {showAwaiting && (
+                        {isRowArchived && (
+                          <span className="px-2 py-0.5 text-[9px] font-black text-zinc-500 bg-zinc-500/5 border border-zinc-500/15 rounded-md tracking-wider uppercase flex items-center gap-1">
+                            Tap to revive
+                          </span>
+                        )}
+                        {!isRowArchived && showAwaiting && (
                           <span className="px-2 py-0.5 text-[9px] font-black text-amber-500 bg-amber-500/5 border border-amber-500/20 rounded-md tracking-wider uppercase flex items-center gap-1">
                             ⏳ Awaiting response
                           </span>
                         )}
-                        {showRespond && (
+                        {!isRowArchived && showRespond && (
                           <span className="px-2 py-0.5 text-[9px] font-black text-cyan-500 bg-[#25F4EE]/5 border border-[#25F4EE]/20 rounded-md tracking-wider uppercase flex items-center gap-1 animate-pulse">
                             💬 Respond to start
                           </span>
                         )}
-                        {hasTimer && !isSaved && !showAwaiting && !showRespond && (
+                        {!isRowArchived && hasTimer && !isSaved && !showAwaiting && !showRespond && (
                           <span className="px-2 py-0.5 text-[9px] font-black text-rose-500 bg-rose-500/5 border border-rose-500/15 rounded-md tracking-wider uppercase flex items-center gap-1 animate-pulse">
                             <Clock className="w-2.5 h-2.5 shrink-0" />
                             EXPIRY RUNNING

@@ -993,8 +993,9 @@ export class ChatRoom {
 
         await db.batch([
           db.prepare("UPDATE users SET links = links - ? WHERE LOWER(username) = ?").bind(REVIVE_COST, authedUser),
+          // Keep archived_at — it marks the snapshot boundary (messages before it are the previous round)
           db.prepare(
-            "UPDATE conversations SET archived = 0, archived_at = NULL, phase = 'awaiting_response', opener_initiator = NULL, opener_timer_choice = NULL WHERE id = ?"
+            "UPDATE conversations SET archived = 0, phase = 'awaiting_response', opener_initiator = NULL, opener_timer_choice = NULL WHERE id = ?"
           ).bind(convId),
         ]);
 
@@ -1236,7 +1237,8 @@ export class ChatRoom {
 
     const now = Date.now();
     await db.batch([
-      db.prepare("DELETE FROM messages WHERE conversation_id = ?").bind(convId),
+      // Keep messages as archive snapshots (mark expired but do NOT delete)
+      db.prepare("UPDATE messages SET expired = 1 WHERE conversation_id = ?").bind(convId),
       db.prepare("DELETE FROM timers WHERE conversation_id = ?").bind(convId),
       db
         .prepare("UPDATE conversations SET archived = 1, archived_at = ?, phase = 'awaiting_response', opener_initiator = NULL, opener_timer_choice = NULL WHERE id = ?")

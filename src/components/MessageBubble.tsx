@@ -17,6 +17,9 @@ interface MessageBubbleProps {
   isLatest?: boolean;
   // When true, the whole conversation is exploding — every bubble blows up.
   forceExplode?: boolean;
+  // When true, this is an archive snapshot — show content without countdown,
+  // even if the message timer has naturally expired.
+  isSnapshot?: boolean;
 }
 
 export const MessageBubble: React.FC<MessageBubbleProps> = ({
@@ -29,6 +32,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   onExplodeComplete,
   isLatest = true,
   forceExplode = false,
+  isSnapshot = false,
 }) => {
   const isMe = message.sender.toLowerCase() === currentUser.username;
   const isPhoto = message.is_photo === 1;
@@ -39,6 +43,8 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
 
   const [stage, setStage] = useState<"active" | "flash" | "exploding" | "expired">(() => {
     if (isSaved) return "active";
+    // Archive snapshots always show content, never expire visually.
+    if (isSnapshot) return "active";
     // Hot potato: earlier (non-latest) messages stay frozen & visible; their own
     // original timer is paused, so never auto-expire them on mount.
     if (!isLatest) return "active";
@@ -54,9 +60,8 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
     if (stage !== "active" || isSaved) return;
 
     // Hot potato: a frozen (non-latest) bubble does NOT run its countdown — its
-    // timer is paused and hidden. Reset any in-progress color shift so it sits
-    // neutral while it waits, and bail out of the animation loop.
-    if (!isLatest || forceExplode) {
+    // timer is paused and hidden. Same for archive snapshots.
+    if (!isLatest || forceExplode || isSnapshot) {
       const el = bubbleRef.current;
       if (el) {
         el.style.backgroundColor = "";
@@ -200,7 +205,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
     >
       <div className={`max-w-[80%] flex flex-col ${isMe ? "items-end" : "items-start"}`}>
         
-        {stage === "expired" ? (
+        {stage === "expired" && !isSnapshot ? (
           /* Expired / Ash Residue State */
           <div className="px-4 py-3 bg-[var(--background)] text-zinc-400 border border-zinc-200 dark:border-zinc-800 rounded-2xl italic text-sm opacity-60">
             [ Message Expired ]
@@ -259,9 +264,11 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
             style={stage === "flash" ? { backgroundColor: "rgb(239, 68, 68)", color: "#ffffff" } : undefined}
             className={`
               px-4 py-3 rounded-2xl text-sm font-medium leading-relaxed font-sans shadow-md transition-colors relative
-              ${isMe
-                ? "bg-gradient-to-tr from-[#FE2C55] to-[#a855f7] text-white rounded-br-xs border border-pink-500/10 shadow-pink-500/5"
-                : "bg-zinc-100 dark:bg-zinc-900 text-[var(--foreground)] rounded-bl-xs border theme-border"
+              ${isSnapshot
+                ? "bg-zinc-800/40 text-zinc-400 border border-zinc-700/40 opacity-70"
+                : isMe
+                  ? "bg-gradient-to-tr from-[#FE2C55] to-[#a855f7] text-white rounded-br-xs border border-pink-500/10 shadow-pink-500/5"
+                  : "bg-zinc-100 dark:bg-zinc-900 text-[var(--foreground)] rounded-bl-xs border theme-border"
               }
             `}
           >
@@ -270,7 +277,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
         )}
 
         {/* Countdown Progress Bar — only the latest message's timer is shown */}
-        {stage === "active" && !isSaved && isLatest && !forceExplode && (
+        {stage === "active" && !isSaved && isLatest && !forceExplode && !isSnapshot && (
           <div className="w-full mt-1.5 h-1 bg-zinc-200 dark:bg-zinc-800 rounded-full overflow-hidden">
             <motion.div
               className="h-full rounded-full transition-colors"
