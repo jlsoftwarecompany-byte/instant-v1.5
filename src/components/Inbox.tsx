@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { User, Friendship, Conversation } from "../types";
 import { wsService } from "../lib/ws";
 import { 
-  Plus, Settings, User as UserIcon, LogOut, Star, MessageSquarePlus, 
+  Plus, Settings, User as UserIcon, Star, MessageSquarePlus,
   Send, UserX, UserCheck, AlertCircle, Sparkles, MessageCircle, ArrowRight,
   Clock
 } from "lucide-react";
@@ -151,56 +151,41 @@ export const Inbox: React.FC<InboxProps> = ({
   return (
     <div className="flex flex-col min-h-screen bg-[var(--background)] font-sans">
       
-      {/* Top Header navbar with quick controls */}
-      <header className="px-6 py-5 border-b theme-border bg-[var(--background)] sticky top-0 z-40 flex items-center justify-between shadow-xs">
-        <div className="flex items-center gap-3">
-          {/* Avatar Click launches Profile representation screen */}
-          <button
-            onClick={onOpenProfile}
-            className={`w-11 h-11 rounded-2xl flex items-center justify-center text-2xl cursor-pointer shadow-md transition-all active:scale-95 border select-none
-              ${(currentUser.linker_color || 'pink') === 'pink' ? 'bg-[#FE2C55]/10 border-[#FE2C55]/30' : ''}
-              ${(currentUser.linker_color || 'pink') === 'cyan' ? 'bg-[#25F4EE]/10 border-[#25F4EE]/30' : ''}
-              ${(currentUser.linker_color || 'pink') === 'purple' ? 'bg-[#a855f7]/10 border-[#a855f7]/30' : ''}
-              ${(currentUser.linker_color || 'pink') === 'gold' ? 'bg-[#eab308]/10 border-[#eab308]/30' : ''}
-              ${(currentUser.linker_color || 'pink') === 'green' ? 'bg-[#22c55e]/10 border-[#22c55e]/30' : ''}
-              ${(currentUser.linker_color || 'pink') === 'blue' ? 'bg-[#3b82f6]/10 border-[#3b82f6]/30' : ''}
-            `}
-          >
-            {currentUser.linker_avatar || "👾"}
-          </button>
-          
-          <div>
-            <h1 onClick={onOpenProfile} className="text-sm font-black theme-text-primary flex items-center gap-1 cursor-pointer hover:text-pink-500 transition-colors uppercase leading-none">
-              {currentUser.nickname}
-            </h1>
-            <p className="text-[10px] text-zinc-400 font-bold mt-1 uppercase tracking-wider flex items-center gap-1">
-              SCORE: <span className="text-amber-500 font-black flex items-center gap-0.5">⭐ {currentUser.links} LINKS</span>
-            </p>
-          </div>
+      {/* Top Header navbar — purple→pink gradient brand bar */}
+      <header className="px-6 py-5 bg-gradient-to-br from-[#7c3aed] via-[#a855f7] to-[#FE2C55] sticky top-0 z-40 flex items-center justify-between shadow-lg">
+        <div className="flex flex-col">
+          {/* instant. brand logo */}
+          <h1 className="text-2xl font-black text-white lowercase leading-none tracking-tight select-none drop-shadow-sm">
+            instant<span className="text-white/90">.</span>
+          </h1>
+          <p className="text-[11px] text-white/70 font-semibold mt-1 leading-none">
+            {friendsList.length === 0 ? "All quiet" : `${friendsList.length} active`}
+          </p>
         </div>
 
         {/* Global actions bar */}
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1.5">
           <button
             onClick={() => setShowAddFriendModal(true)}
-            className="p-2.5 hover:bg-black/10 dark:hover:bg-zinc-900 rounded-xl text-zinc-600 hover:text-indigo-600 dark:text-zinc-400 dark:hover:text-indigo-400 transition"
+            className="w-10 h-10 flex items-center justify-center bg-white/15 hover:bg-white/25 rounded-full text-white transition active:scale-95"
             title="Add Friend"
           >
             <MessageSquarePlus className="w-5 h-5" />
           </button>
           <button
             onClick={onOpenSettings}
-            className="p-2.5 hover:bg-black/10 dark:hover:bg-zinc-900 rounded-xl text-zinc-600 hover:text-indigo-600 dark:text-zinc-400 dark:hover:text-indigo-400 transition"
+            className="w-10 h-10 flex items-center justify-center bg-white/15 hover:bg-white/25 rounded-full text-white transition active:scale-95"
             title="Settings"
           >
             <Settings className="w-5 h-5" />
           </button>
+          {/* Linker profile button (moved here, replaces Log Out) */}
           <button
-            onClick={onLogOut}
-            className="p-2.5 hover:bg-black/10 dark:hover:bg-zinc-900 rounded-xl text-zinc-600 hover:text-rose-600 dark:text-zinc-400 dark:hover:text-rose-400 transition"
-            title="Log Out"
+            onClick={onOpenProfile}
+            className="w-10 h-10 rounded-full flex items-center justify-center text-xl cursor-pointer transition-all active:scale-95 bg-white/20 hover:bg-white/30 border border-white/40 select-none shadow-md ml-0.5"
+            title="My Profile"
           >
-            <LogOut className="w-5 h-5" />
+            {currentUser.linker_avatar || "👾"}
           </button>
         </div>
       </header>
@@ -210,6 +195,9 @@ export const Inbox: React.FC<InboxProps> = ({
 
         {/* Active Conversations list — flush to header, full width */}
         <section>
+          <h2 className="text-[11px] font-bold tracking-[0.2em] text-zinc-400 uppercase px-6 pt-5 pb-2">
+            Messages
+          </h2>
           <div className="divide-y theme-border border-b">
             {friendsList.length === 0 ? (
               <div className="p-10 text-center flex flex-col items-center justify-center space-y-3">
@@ -253,13 +241,13 @@ export const Inbox: React.FC<InboxProps> = ({
                       className="p-5 flex items-center justify-between cursor-pointer transition-colors"
                     >
                       <div className="flex items-center gap-3.5">
-                        <div className={`w-11 h-11 rounded-2xl flex items-center justify-center text-2xl border shrink-0 select-none
-                          ${(friend.linker_color || 'pink') === 'pink' ? 'bg-[#FE2C55]/10 border-[#FE2C55]/30 shadow-md' : ''}
-                          ${(friend.linker_color || 'pink') === 'cyan' ? 'bg-[#25F4EE]/10 border-[#25F4EE]/30 shadow-md' : ''}
-                          ${(friend.linker_color || 'pink') === 'purple' ? 'bg-[#a855f7]/10 border-[#a855f7]/30 shadow-md' : ''}
-                          ${(friend.linker_color || 'pink') === 'gold' ? 'bg-[#eab308]/10 border-[#eab308]/30 shadow-md' : ''}
-                          ${(friend.linker_color || 'pink') === 'green' ? 'bg-[#22c55e]/10 border-[#22c55e]/30 shadow-md' : ''}
-                          ${(friend.linker_color || 'pink') === 'blue' ? 'bg-[#3b82f6]/10 border-[#3b82f6]/30 shadow-md' : ''}
+                        <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-2xl shrink-0 select-none shadow-lg text-white
+                          ${(friend.linker_color || 'pink') === 'pink' ? 'bg-gradient-to-br from-[#FE2C55] to-[#a855f7]' : ''}
+                          ${(friend.linker_color || 'pink') === 'cyan' ? 'bg-gradient-to-br from-[#25F4EE] to-[#3b82f6]' : ''}
+                          ${(friend.linker_color || 'pink') === 'purple' ? 'bg-gradient-to-br from-[#a855f7] to-[#FE2C55]' : ''}
+                          ${(friend.linker_color || 'pink') === 'gold' ? 'bg-gradient-to-br from-[#eab308] to-[#FE2C55]' : ''}
+                          ${(friend.linker_color || 'pink') === 'green' ? 'bg-gradient-to-br from-[#22c55e] to-[#25F4EE]' : ''}
+                          ${(friend.linker_color || 'pink') === 'blue' ? 'bg-gradient-to-br from-[#3b82f6] to-[#a855f7]' : ''}
                         `}>
                           {friend.linker_avatar || "👾"}
                         </div>

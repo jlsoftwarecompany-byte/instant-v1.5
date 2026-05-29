@@ -12,7 +12,7 @@ const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [theme, setTheme] = useState<Theme>(() => {
     const saved = localStorage.getItem("instant-theme");
-    return (saved as Theme) || "white";
+    return (saved as Theme) || "black";
   });
 
   useEffect(() => {
@@ -22,13 +22,13 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (theme === "black") {
       root.classList.add("dark-theme");
       root.classList.add("dark");
-      root.style.setProperty("--background", "#04010a"); // Cyber black-purple
-      root.style.setProperty("--foreground", "#f1f1fc"); // Soft glowing white
-      root.style.setProperty("--card-bg", "#0b0518"); // Rich glowing deep purple container
-      root.style.setProperty("--border-color", "#2c1251"); // Glowing violet border
-      root.style.setProperty("--accent-text", "#25f4ee"); // TikTok Cyan
-      root.style.setProperty("--muted-text", "#d4b3ff"); // Light lilac accent
-      root.style.backgroundColor = "#04010a";
+      root.style.setProperty("--background", "#0a0a0d"); // Near-black neutral
+      root.style.setProperty("--foreground", "#f5f5f7"); // Crisp white text
+      root.style.setProperty("--card-bg", "#141418"); // Dark elevated surface
+      root.style.setProperty("--border-color", "#26262e"); // Subtle dark border
+      root.style.setProperty("--accent-text", "#fe2c55"); // TikTok pink accent
+      root.style.setProperty("--muted-text", "#8b8b96"); // Neutral muted grey
+      root.style.backgroundColor = "#0a0a0d";
     } else {
       root.classList.remove("dark-theme");
       root.classList.remove("dark");
