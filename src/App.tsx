@@ -15,9 +15,10 @@ import { Profile } from "./components/Profile";
 import { LinkerGenerator } from "./components/LinkerGenerator";
 import { ParticleBurst } from "./components/ParticleBurst";
 import { IOSInstallBanner } from "./components/IOSInstallBanner";
+import { SnapNotificationQueue, SnapNotificationItem } from "./components/SnapNotification";
 import { wsService } from "./lib/ws";
 import { User, Friendship, Conversation, TimerState } from "./types";
-import { RefreshCw, Signal, SignalZero, WifiOff } from "lucide-react";
+import { RefreshCw, Signal, SignalZero, WifiOff, Gift } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
 // Web Push base64 formatting helper
@@ -122,6 +123,20 @@ function MainApp() {
   // Link burst animation trigger overlays
   const [rewardBurst, setRewardBurst] = useState<{ amount: number; reason: string } | null>(null);
 
+  // In-app notification queue (Snapchat-style)
+  const [snapNotifications, setSnapNotifications] = useState<SnapNotificationItem[]>([]);
+
+  // Helper to add a notification
+  const addSnapNotification = (notif: Omit<SnapNotificationItem, 'id'>) => {
+    const id = `notif-${Date.now()}-${Math.random()}`;
+    setSnapNotifications(prev => [...prev, { ...notif, id }]);
+  };
+
+  // Helper to dismiss a notification
+  const dismissSnapNotification = (id: string) => {
+    setSnapNotifications(prev => prev.filter(n => n.id !== id));
+  };
+
   // Capture Android beforeinstallprompt so Settings can trigger it
   useEffect(() => {
     const handler = (e: Event) => {
@@ -222,16 +237,10 @@ function MainApp() {
           break;
 
         case "LINKS_EARNED":
-          // Overlay gold burst particle animation instantly
-          setRewardBurst({
-            amount: data.amount,
-            reason: data.reason
-          });
-          
-          // Refresh user links total count
+          // Update user's link count
           if (currentUser) {
             setCurrentUser(prev => prev ? { ...prev, links: data.links } : null);
-            
+
             // Refresh info in storage
             const stored = localStorage.getItem("instant-user");
             if (stored) {
@@ -240,6 +249,17 @@ function MainApp() {
               localStorage.setItem("instant-user", JSON.stringify(parsed));
             }
           }
+
+          // Show Snapchat-style notification
+          addSnapNotification({
+            type: "links_earned",
+            title: `+${data.amount} ⭐ LINKS!`,
+            subtitle: data.reason || "You earned new links",
+            icon: <Gift className="w-5 h-5" />,
+            accentColor: "border-amber-500/30 bg-amber-500/5",
+            textColor: "text-amber-600 dark:text-amber-400",
+            duration: 5000
+          });
           break;
 
         case "REVIVE_SUCCESS":
@@ -344,6 +364,12 @@ function MainApp() {
   return (
     <div className="min-h-screen bg-[var(--background)] transition-colors duration-200">
 
+      {/* Snapchat-style in-app notifications */}
+      <SnapNotificationQueue
+        notifications={snapNotifications}
+        onDismiss={dismissSnapNotification}
+      />
+
       {/* Burst Reward Animation Overlay */}
       <AnimatePresence>
         {rewardBurst && (
@@ -403,6 +429,7 @@ function MainApp() {
           onOpenProfile={() => setView("profile")}
           onOpenGenerator={() => setView("generator")}
           onLogOut={handleLogOut}
+          addSnapNotification={addSnapNotification}
         />
       )}
 
@@ -421,6 +448,7 @@ function MainApp() {
             setActiveConversationId(null);
           }}
           onLinksRewardTriggered={handleTriggerLinksRewardOverlay}
+          addSnapNotification={addSnapNotification}
         />
       )}
 

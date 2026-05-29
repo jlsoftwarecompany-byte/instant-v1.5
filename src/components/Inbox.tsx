@@ -1,10 +1,11 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { User, Friendship, Conversation } from "../types";
 import { wsService } from "../lib/ws";
+import { SnapNotificationItem } from "./SnapNotification";
 import {
   Plus, Settings, User as UserIcon, Star, MessageSquarePlus,
   Send, UserX, UserCheck, AlertCircle, Sparkles, MessageCircle,
-  Clock
+  Clock, Flame, Heart, Archive
 } from "lucide-react";
 import { useTheme } from "./ThemeContext";
 import { motion, AnimatePresence } from "motion/react";
@@ -21,6 +22,7 @@ interface InboxProps {
   onOpenProfile: () => void;
   onOpenGenerator: () => void;
   onLogOut: () => void;
+  addSnapNotification?: (notif: Omit<SnapNotificationItem, 'id'>) => void;
 }
 
 export const Inbox: React.FC<InboxProps> = ({
@@ -34,7 +36,8 @@ export const Inbox: React.FC<InboxProps> = ({
   onOpenSettings,
   onOpenProfile,
   onOpenGenerator,
-  onLogOut
+  onLogOut,
+  addSnapNotification
 }) => {
   const { theme } = useTheme();
 
@@ -67,7 +70,7 @@ export const Inbox: React.FC<InboxProps> = ({
     const friendUsername = f.requester_username.toLowerCase() === currentUser.username
       ? f.receiver_username.toLowerCase()
       : f.requester_username.toLowerCase();
-    
+
     const uInfo = allUsersMap[friendUsername] || { nickname: friendUsername, links: 0, linker_avatar: '👾', linker_color: 'pink' };
     return {
       username: friendUsername,
@@ -77,6 +80,80 @@ export const Inbox: React.FC<InboxProps> = ({
       linker_color: uInfo.linker_color || 'pink'
     };
   });
+
+  // Setup WebSocket listeners for notification events
+  useEffect(() => {
+    const handleNotificationEvent = (data: any) => {
+      // Conversation exploded notification
+      if (data.type === "CHAT_DELETED") {
+        const conversationId = data.conversationId;
+        const conversation = activeConversationsRaw.find(c => c.id === conversationId);
+
+        if (conversation && addSnapNotification) {
+          const otherUsername = conversation.participant_1.toLowerCase() === currentUser.username.toLowerCase()
+            ? conversation.participant_2
+            : conversation.participant_1;
+
+          const otherNickname = allUsersMap[otherUsername]?.nickname || otherUsername;
+
+          addSnapNotification({
+            type: "conversation_exploded",
+            title: `Chat with ${otherNickname} expired`,
+            subtitle: "The conversation was permanently deleted",
+            icon: <Flame className="w-5 h-5" />,
+            accentColor: "border-red-500/30 bg-red-500/5",
+            textColor: "text-red-600 dark:text-red-400",
+            duration: 4000
+          });
+        }
+      }
+
+      // Friend added notification
+      if (data.type === "FRIEND_REQUEST_ACCEPTED" || data.type === "FRIENDSHIP_ACCEPTED") {
+        const friendUsername = data.friendUsername || data.sender;
+        const friendNickname = allUsersMap[friendUsername]?.nickname || friendUsername;
+
+        if (addSnapNotification) {
+          addSnapNotification({
+            type: "friend_added",
+            title: `${friendNickname} added you!`,
+            subtitle: "New connection made",
+            icon: <Heart className="w-5 h-5" />,
+            accentColor: "border-pink-500/30 bg-pink-500/5",
+            textColor: "text-pink-600 dark:text-pink-400",
+            duration: 4500
+          });
+        }
+      }
+
+      // Conversation revived notification
+      if (data.type === "CONVERSATION_REVIVED" || data.type === "ARCHIVE_RESTORED") {
+        const conversationId = data.conversationId;
+        const conversation = activeConversationsRaw.find(c => c.id === conversationId);
+
+        if (conversation && addSnapNotification) {
+          const otherUsername = conversation.participant_1.toLowerCase() === currentUser.username.toLowerCase()
+            ? conversation.participant_2
+            : conversation.participant_1;
+
+          const otherNickname = allUsersMap[otherUsername]?.nickname || otherUsername;
+
+          addSnapNotification({
+            type: "conversation_revived",
+            title: `Chat with ${otherNickname} revived!`,
+            subtitle: "An archived conversation is active again",
+            icon: <Archive className="w-5 h-5" />,
+            accentColor: "border-purple-500/30 bg-purple-500/5",
+            textColor: "text-purple-600 dark:text-purple-400",
+            duration: 5000
+          });
+        }
+      }
+    };
+
+    const cleanup = wsService.registerListener(handleNotificationEvent);
+    return () => cleanup();
+  }, [activeConversationsRaw, currentUser.username, allUsersMap, addSnapNotification]);
 
   const sendFriendRequest = (e: React.FormEvent) => {
     e.preventDefault();
