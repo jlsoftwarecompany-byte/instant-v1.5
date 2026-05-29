@@ -1,9 +1,9 @@
 import React, { useState } from "react";
 import { User, Friendship, Conversation } from "../types";
 import { wsService } from "../lib/ws";
-import { 
+import {
   Plus, Settings, User as UserIcon, Star, MessageSquarePlus,
-  Send, UserX, UserCheck, AlertCircle, Sparkles, MessageCircle, ArrowRight,
+  Send, UserX, UserCheck, AlertCircle, Sparkles, MessageCircle,
   Clock
 } from "lucide-react";
 import { useTheme } from "./ThemeContext";
@@ -216,7 +216,21 @@ export const Inbox: React.FC<InboxProps> = ({
               </div>
             ) : (
               <AnimatePresence>
-                {friendsList.map((friend, idx) => {
+                {/* Sort: conversations with a pending opener you must respond to float to the top */}
+                {[...friendsList].sort((a, b) => {
+                  const getScore = (friend: typeof a) => {
+                    const cId = findConversationId(friend.username);
+                    const conv = activeConversations.find(c => c.id === cId);
+                    const phase = conv?.phase || "awaiting_response";
+                    const openerInit = conv?.opener_initiator
+                      ? String(conv.opener_initiator).toLowerCase()
+                      : null;
+                    const iAmInit = !!openerInit && openerInit === currentUser.username;
+                    const mustRespond = !conv?.saved && !conv?.archived && phase === "awaiting_response" && !!openerInit && !iAmInit;
+                    return mustRespond ? -1 : 0;
+                  };
+                  return getScore(a) - getScore(b);
+                }).map((friend, idx) => {
                   const convId = findConversationId(friend.username);
                   const hasTimer = convId ? getConversationTimerText(convId) : null;
                   const conversation = activeConversations.find(c => c.id === convId);
@@ -294,9 +308,20 @@ export const Inbox: React.FC<InboxProps> = ({
                           </span>
                         )}
                         {!isRowArchived && showRespond && (
-                          <span className="px-2 py-0.5 text-[9px] font-black text-cyan-500 bg-[#25F4EE]/5 border border-[#25F4EE]/20 rounded-md tracking-wider uppercase flex items-center gap-1 animate-pulse">
-                            💬 Respond to start
-                          </span>
+                          <motion.span
+                            initial={{ scale: 0.85, opacity: 0 }}
+                            animate={{ scale: 1, opacity: 1 }}
+                            transition={{ type: "spring", stiffness: 500, damping: 20 }}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-black text-[11px] tracking-wide uppercase cursor-pointer select-none
+                              bg-gradient-to-r from-[#25F4EE] to-[#a855f7]
+                              text-zinc-950
+                              shadow-[0_0_14px_rgba(37,244,238,0.45)]
+                              border border-[#25F4EE]/40
+                              animate-pulse
+                            "
+                          >
+                            💬 Click to respond
+                          </motion.span>
                         )}
                         {!isRowArchived && hasTimer && !isSaved && !showAwaiting && !showRespond && (
                           <span className="px-2 py-0.5 text-[9px] font-black text-rose-500 bg-rose-500/5 border border-rose-500/15 rounded-md tracking-wider uppercase flex items-center gap-1 animate-pulse">
@@ -304,7 +329,6 @@ export const Inbox: React.FC<InboxProps> = ({
                             EXPIRY RUNNING
                           </span>
                         )}
-                        <ArrowRight className="w-4 h-4 text-zinc-300" />
                       </div>
                     </motion.div>
                   );
