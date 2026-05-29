@@ -130,6 +130,18 @@ try {
 try {
   db.exec("ALTER TABLE conversations ADD COLUMN message_count INTEGER DEFAULT 0");
 } catch (e) {}
+// v1.8 — Social controls: ignored users
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ignored_users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ignorer_username TEXT NOT NULL,
+      ignored_username TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      UNIQUE(ignorer_username, ignored_username)
+    );
+  `);
+} catch (e) {}
 
 // Web Push setup
 let vapidPublic = process.env.VAPID_PUBLIC_KEY || "";
@@ -291,13 +303,37 @@ function broadcastFriendUpdateForUser(username: string) {
     ORDER BY links DESC
   `).all(uLower) as any[];
 
+  // Users this user has ignored
+  const ignoredRows = db.prepare("SELECT ignored_username, created_at FROM ignored_users WHERE LOWER(ignorer_username) = ?").all(uLower) as any[];
+  const ignoredSet = new Set(ignoredRows.map((r: any) => r.ignored_username.toLowerCase()));
+
+  // Users who have ignored THIS user (hide them from this user's discover list too)
+  const ignoredByRows = db.prepare("SELECT ignorer_username FROM ignored_users WHERE LOWER(ignored_username) = ?").all(uLower) as any[];
+  const ignoredBySet = new Set(ignoredByRows.map((r: any) => r.ignorer_username.toLowerCase()));
+
   const discoverUsers = allFilteredUsers.filter(u => {
-    const isFriend = friendships.some(f => 
-      (f.requester_username.toLowerCase() === uLower && f.receiver_username.toLowerCase() === u.username.toLowerCase()) ||
-      (f.receiver_username.toLowerCase() === uLower && f.requester_username.toLowerCase() === u.username.toLowerCase())
+    const uName = u.username.toLowerCase();
+    const isFriend = friendships.some(f =>
+      (f.requester_username.toLowerCase() === uLower && f.receiver_username.toLowerCase() === uName) ||
+      (f.receiver_username.toLowerCase() === uLower && f.requester_username.toLowerCase() === uName)
     );
-    return !isFriend;
+    return !isFriend && !ignoredSet.has(uName) && !ignoredBySet.has(uName);
   }).slice(0, 15);
+
+  // Full ignored-user details for Settings display
+  const ignoredUserDetails: any[] = [];
+  for (const row of ignoredRows) {
+    const uRow = db.prepare("SELECT username, nickname, linker_avatar, linker_color FROM users WHERE LOWER(username) = ?").get(row.ignored_username.toLowerCase()) as any;
+    if (uRow) {
+      ignoredUserDetails.push({
+        ignored_username: row.ignored_username,
+        nickname: uRow.nickname,
+        linker_avatar: uRow.linker_avatar || '👾',
+        linker_color: uRow.linker_color || 'pink',
+        created_at: row.created_at || 0
+      });
+    }
+  }
 
   // Find active conversations
   const conversations = db.prepare(`
@@ -321,6 +357,7 @@ function broadcastFriendUpdateForUser(username: string) {
       users: usersMap,
       conversations,
       discoverUsers,
+      ignoredUsers: ignoredUserDetails,
       timers: timers.map(t => ({
         conversation_id: t.conversation_id,
         timer_type: t.timer_type,
@@ -730,6 +767,18 @@ wss.on("connection", (ws) => {
             return;
           }
 
+          // Ignore guards (v1.8)
+          const isIgnoredByTarget = db.prepare("SELECT id FROM ignored_users WHERE LOWER(ignorer_username) = ? AND LOWER(ignored_username) = ?").get(target, authenticatedUser) as any;
+          if (isIgnoredByTarget) {
+            ws.send(JSON.stringify({ type: "FRIEND_REQUEST_RESPONSE", success: false, error: "@" + target + " is not accepting friend requests" }));
+            return;
+          }
+          const requesterIgnoredTarget = db.prepare("SELECT id FROM ignored_users WHERE LOWER(ignorer_username) = ? AND LOWER(ignored_username) = ?").get(authenticatedUser, target) as any;
+          if (requesterIgnoredTarget) {
+            ws.send(JSON.stringify({ type: "FRIEND_REQUEST_RESPONSE", success: false, error: "You have ignored this user. Unignore them first in Settings." }));
+            return;
+          }
+
           // See if friendship already exists
           const existing = db.prepare(`
             SELECT * FROM friendships 
@@ -808,12 +857,63 @@ wss.on("connection", (ws) => {
           const reqUser = (data.requesterUsername || "").toLowerCase().trim();
 
           db.prepare(`
-            DELETE FROM friendships 
+            DELETE FROM friendships
             WHERE LOWER(requester_username) = ? AND LOWER(receiver_username) = ?
           `).run(reqUser, authenticatedUser);
 
           syncUserFullData(authenticatedUser);
           syncUserFullData(reqUser);
+          break;
+        }
+
+        case "REMOVE_FRIEND": {
+          if (!authenticatedUser) return;
+          const otherUser = (data.targetUsername || "").toLowerCase().trim();
+          if (!otherUser) return;
+
+          db.prepare(`
+            DELETE FROM friendships
+            WHERE (LOWER(requester_username) = ? AND LOWER(receiver_username) = ?)
+               OR (LOWER(requester_username) = ? AND LOWER(receiver_username) = ?)
+          `).run(authenticatedUser, otherUser, otherUser, authenticatedUser);
+
+          ws.send(JSON.stringify({ type: "REMOVE_FRIEND_SUCCESS", target: otherUser }));
+
+          syncUserFullData(authenticatedUser);
+          syncUserFullData(otherUser);
+          break;
+        }
+
+        case "IGNORE_USER": {
+          if (!authenticatedUser) return;
+          const otherUser = (data.targetUsername || "").toLowerCase().trim();
+          if (!otherUser || otherUser === authenticatedUser) return;
+
+          const now = Date.now();
+          db.prepare("INSERT OR IGNORE INTO ignored_users (ignorer_username, ignored_username, created_at) VALUES (?, ?, ?)").run(authenticatedUser, otherUser, now);
+          db.prepare(`
+            DELETE FROM friendships
+            WHERE (LOWER(requester_username) = ? AND LOWER(receiver_username) = ?)
+               OR (LOWER(requester_username) = ? AND LOWER(receiver_username) = ?)
+          `).run(authenticatedUser, otherUser, otherUser, authenticatedUser);
+
+          ws.send(JSON.stringify({ type: "IGNORE_USER_SUCCESS", target: otherUser }));
+
+          syncUserFullData(authenticatedUser);
+          syncUserFullData(otherUser);
+          break;
+        }
+
+        case "UNIGNORE_USER": {
+          if (!authenticatedUser) return;
+          const otherUser = (data.targetUsername || "").toLowerCase().trim();
+          if (!otherUser) return;
+
+          db.prepare("DELETE FROM ignored_users WHERE LOWER(ignorer_username) = ? AND LOWER(ignored_username) = ?").run(authenticatedUser, otherUser);
+
+          ws.send(JSON.stringify({ type: "UNIGNORE_USER_SUCCESS", target: otherUser }));
+
+          syncUserFullData(authenticatedUser);
           break;
         }
 

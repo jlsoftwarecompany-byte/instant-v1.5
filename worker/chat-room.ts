@@ -591,6 +591,34 @@ export class ChatRoom {
           return;
         }
 
+        // Block request if target has ignored the requester (vague error — don't reveal the ignore)
+        const isIgnoredByTarget = await db
+          .prepare("SELECT id FROM ignored_users WHERE LOWER(ignorer_username) = ? AND LOWER(ignored_username) = ?")
+          .bind(target, authedUser)
+          .first<any>();
+        if (isIgnoredByTarget) {
+          ws.send(JSON.stringify({
+            type: "FRIEND_REQUEST_RESPONSE",
+            success: false,
+            error: "@" + target + " is not accepting friend requests",
+          }));
+          return;
+        }
+
+        // Also block if the requester has ignored the target (prevents accidental re-adds)
+        const requesterIgnoredTarget = await db
+          .prepare("SELECT id FROM ignored_users WHERE LOWER(ignorer_username) = ? AND LOWER(ignored_username) = ?")
+          .bind(authedUser, target)
+          .first<any>();
+        if (requesterIgnoredTarget) {
+          ws.send(JSON.stringify({
+            type: "FRIEND_REQUEST_RESPONSE",
+            success: false,
+            error: "You have ignored this user. Unignore them first in Settings.",
+          }));
+          return;
+        }
+
         const existing = await db
           .prepare(
             `SELECT * FROM friendships
@@ -681,6 +709,68 @@ export class ChatRoom {
           .bind(requester, authedUser)
           .run();
         await Promise.all([this.syncUser(authedUser), this.syncUser(requester)]);
+        break;
+      }
+
+      // ── Remove an existing friend ─────────────────────────────────────────
+      case "REMOVE_FRIEND": {
+        if (!authedUser) return;
+        const target = (data.targetUsername || "").toLowerCase().trim();
+        if (!target) return;
+
+        await db
+          .prepare(
+            `DELETE FROM friendships
+             WHERE (LOWER(requester_username) = ? AND LOWER(receiver_username) = ?)
+                OR (LOWER(requester_username) = ? AND LOWER(receiver_username) = ?)`
+          )
+          .bind(authedUser, target, target, authedUser)
+          .run();
+
+        ws.send(JSON.stringify({ type: "REMOVE_FRIEND_SUCCESS", targetUsername: target }));
+        await Promise.all([this.syncUser(authedUser), this.syncUser(target)]);
+        break;
+      }
+
+      // ── Ignore a user (hide everywhere, block incoming requests) ──────────
+      case "IGNORE_USER": {
+        if (!authedUser) return;
+        const target = (data.targetUsername || "").toLowerCase().trim();
+        if (!target || target === authedUser) return;
+
+        const now = Date.now();
+        await db.batch([
+          db.prepare(
+            "INSERT OR IGNORE INTO ignored_users (ignorer_username, ignored_username, created_at) VALUES (?, ?, ?)"
+          ).bind(authedUser, target, now),
+          db.prepare(
+            `DELETE FROM friendships
+             WHERE (LOWER(requester_username) = ? AND LOWER(receiver_username) = ?)
+                OR (LOWER(requester_username) = ? AND LOWER(receiver_username) = ?)`
+          ).bind(authedUser, target, target, authedUser),
+          db.prepare(
+            "DELETE FROM friendships WHERE LOWER(requester_username) = ? AND LOWER(receiver_username) = ?"
+          ).bind(target, authedUser),
+        ]);
+
+        ws.send(JSON.stringify({ type: "IGNORE_USER_SUCCESS", targetUsername: target }));
+        await Promise.all([this.syncUser(authedUser), this.syncUser(target)]);
+        break;
+      }
+
+      // ── Unignore a user ───────────────────────────────────────────────────
+      case "UNIGNORE_USER": {
+        if (!authedUser) return;
+        const target = (data.targetUsername || "").toLowerCase().trim();
+        if (!target) return;
+
+        await db
+          .prepare("DELETE FROM ignored_users WHERE LOWER(ignorer_username) = ? AND LOWER(ignored_username) = ?")
+          .bind(authedUser, target)
+          .run();
+
+        ws.send(JSON.stringify({ type: "UNIGNORE_USER_SUCCESS", targetUsername: target }));
+        await this.syncUser(authedUser);
         break;
       }
 
@@ -1173,15 +1263,50 @@ export class ChatRoom {
       .bind(uLower)
       .all<any>();
 
+    // Fetch users this user has ignored
+    const { results: ignoredRows } = await db
+      .prepare("SELECT ignored_username, created_at FROM ignored_users WHERE LOWER(ignorer_username) = ?")
+      .bind(uLower)
+      .all<any>();
+    const ignoredSet = new Set(ignoredRows.map((r: any) => r.ignored_username.toLowerCase()));
+
+    // Fetch users who have ignored THIS user (hide them from this user's discover list too)
+    const { results: ignoredByRows } = await db
+      .prepare("SELECT ignorer_username FROM ignored_users WHERE LOWER(ignored_username) = ?")
+      .bind(uLower)
+      .all<any>();
+    const ignoredBySet = new Set(ignoredByRows.map((r: any) => r.ignorer_username.toLowerCase()));
+
     const discoverUsers = allUsers
       .filter((u) => {
-        return !friendships.some(
+        const uName = u.username.toLowerCase();
+        const isFriend = friendships.some(
           (f) =>
-            (f.requester_username.toLowerCase() === uLower && f.receiver_username.toLowerCase() === u.username.toLowerCase()) ||
-            (f.receiver_username.toLowerCase() === uLower && f.requester_username.toLowerCase() === u.username.toLowerCase())
+            (f.requester_username.toLowerCase() === uLower && f.receiver_username.toLowerCase() === uName) ||
+            (f.receiver_username.toLowerCase() === uLower && f.requester_username.toLowerCase() === uName)
         );
+        // Exclude friends, users I've ignored, and users who have ignored me
+        return !isFriend && !ignoredSet.has(uName) && !ignoredBySet.has(uName);
       })
       .slice(0, 15);
+
+    // Full ignored-user details for Settings display
+    const ignoredUserDetails: any[] = [];
+    for (const row of ignoredRows) {
+      const uRow = await db
+        .prepare("SELECT username, nickname, linker_avatar, linker_color FROM users WHERE LOWER(username) = ?")
+        .bind(row.ignored_username.toLowerCase())
+        .first<any>();
+      if (uRow) {
+        ignoredUserDetails.push({
+          ignored_username: row.ignored_username,
+          nickname: uRow.nickname,
+          linker_avatar: uRow.linker_avatar || "👾",
+          linker_color: uRow.linker_color || "pink",
+          created_at: row.created_at || 0,
+        });
+      }
+    }
 
     const { results: conversations } = await db
       .prepare("SELECT * FROM conversations WHERE LOWER(participant_1) = ? OR LOWER(participant_2) = ?")
@@ -1206,6 +1331,7 @@ export class ChatRoom {
           users: usersMap,
           conversations,
           discoverUsers,
+          ignoredUsers: ignoredUserDetails,
           timers: timers.map((t) => ({
             conversation_id: t.conversation_id,
             timer_type: t.timer_type,

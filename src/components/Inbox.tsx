@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { User, Friendship, Conversation } from "../types";
+import { User, Friendship, Conversation, LinkerProfileTarget } from "../types";
 import { wsService } from "../lib/ws";
 import { SnapNotificationItem } from "./SnapNotification";
 import {
@@ -22,6 +22,7 @@ interface InboxProps {
   onOpenProfile: () => void;
   onOpenGenerator: () => void;
   onLogOut: () => void;
+  onOpenLinkerProfile: (target: LinkerProfileTarget) => void;
   addSnapNotification?: (notif: Omit<SnapNotificationItem, 'id'>) => void;
 }
 
@@ -37,6 +38,7 @@ export const Inbox: React.FC<InboxProps> = ({
   onOpenProfile,
   onOpenGenerator,
   onLogOut,
+  onOpenLinkerProfile,
   addSnapNotification
 }) => {
   const { theme } = useTheme();
@@ -335,8 +337,22 @@ export const Inbox: React.FC<InboxProps> = ({
                       onClick={() => convId && onOpenChat(friend, convId)}
                       className={`p-5 flex items-center justify-between cursor-pointer transition-colors ${isRowArchived ? "opacity-60" : ""}`}
                     >
-                      <div className="flex items-center gap-3.5">
-                        <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-2xl shrink-0 select-none shadow-lg
+                      <div
+                        className="flex items-center gap-3.5 flex-1 min-w-0 cursor-pointer group"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onOpenLinkerProfile({
+                            username: friend.username,
+                            nickname: friend.nickname,
+                            links: friend.links,
+                            linker_avatar: friend.linker_avatar,
+                            linker_color: friend.linker_color,
+                            isFriend: true,
+                            isIgnored: false,
+                          });
+                        }}
+                      >
+                        <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-2xl shrink-0 select-none shadow-lg group-hover:scale-105 transition-transform
                           ${isRowArchived
                             ? "bg-zinc-700/40 border border-zinc-600/30 grayscale text-zinc-400"
                             : `text-white
@@ -350,8 +366,8 @@ export const Inbox: React.FC<InboxProps> = ({
                           {friend.linker_avatar || "👾"}
                         </div>
 
-                        <div className="text-left">
-                          <h3 className="font-extrabold text-sm theme-text-primary flex items-center gap-1.5 leading-none uppercase">
+                        <div className="text-left min-w-0">
+                          <h3 className="font-extrabold text-sm theme-text-primary flex items-center gap-1.5 leading-none uppercase group-hover:underline">
                             {friend.nickname}
                             {isSaved && (
                               <span className="text-[8px] px-1.5 py-0.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 rounded-sm font-black tracking-wide uppercase">
@@ -497,8 +513,21 @@ export const Inbox: React.FC<InboxProps> = ({
                       ${uColor === 'blue' ? 'border-[#3b82f6]/20 bg-gradient-to-tr from-[#3b82f6]/5 to-transparent shadow-[0_0_8px_rgba(59,130,246,0.05)]' : ''}
                     `}
                   >
-                    <div className="flex items-center gap-2">
-                      <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-xl shrink-0 select-none border
+                    <div
+                      className="flex items-center gap-2 cursor-pointer group"
+                      onClick={() => {
+                        onOpenLinkerProfile({
+                          username: user.username,
+                          nickname: user.nickname,
+                          links: user.links,
+                          linker_avatar: user.linker_avatar,
+                          linker_color: user.linker_color,
+                          isFriend: false,
+                          isIgnored: false,
+                        });
+                      }}
+                    >
+                      <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-xl shrink-0 select-none border group-hover:scale-105 transition-transform
                         ${uColor === 'pink' ? 'bg-[#FE2C55]/10 border-[#FE2C55]/20' : ''}
                         ${uColor === 'cyan' ? 'bg-[#25F4EE]/10 border-[#25F4EE]/20' : ''}
                         ${uColor === 'purple' ? 'bg-[#a855f7]/10 border-[#a855f7]/20' : ''}
@@ -510,7 +539,7 @@ export const Inbox: React.FC<InboxProps> = ({
                       </div>
 
                       <div className="min-w-0 flex-1">
-                        <h4 className="font-extrabold text-[11px] theme-text-primary uppercase truncate tracking-tight leading-none">
+                        <h4 className="font-extrabold text-[11px] theme-text-primary uppercase truncate tracking-tight leading-none group-hover:underline">
                           {user.nickname}
                         </h4>
                         <p className="text-[9px] text-zinc-400 font-bold truncate mt-1">

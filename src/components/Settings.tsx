@@ -1,8 +1,8 @@
 import React, { useState } from "react";
 import { useTheme } from "./ThemeContext";
 import { wsService } from "../lib/ws";
-import { User } from "../types";
-import { Sun, Moon, Check, UserCheck, ChevronLeft, Save, Star } from "lucide-react";
+import { User, IgnoredUser } from "../types";
+import { Sun, Moon, Check, UserCheck, ChevronLeft, Save, Star, EyeOff } from "lucide-react";
 import { motion } from "motion/react";
 
 interface SettingsProps {
@@ -10,6 +10,8 @@ interface SettingsProps {
   onBack: () => void;
   onUserUpdate: (updatedUser: User) => void;
   onLogOut: () => void;
+  ignoredUsers: IgnoredUser[];
+  onUnignoreUser: (username: string) => void;
 }
 
 const LINKER_MASCOTS = [
@@ -34,7 +36,7 @@ const LINKER_AURAS = [
   { key: "blue", label: "Hyper Blue", class: "bg-[#3b82f6]/25 text-[#3b82f6] border-[#3b82f6]/40 shadow-[0_0_12px_#3b82f6_inset]" }
 ];
 
-export const Settings: React.FC<SettingsProps> = ({ currentUser, onBack, onUserUpdate, onLogOut }) => {
+export const Settings: React.FC<SettingsProps> = ({ currentUser, onBack, onUserUpdate, onLogOut, ignoredUsers, onUnignoreUser }) => {
   const { theme, toggleTheme } = useTheme();
   const [nickname, setNickname] = useState(currentUser.nickname);
   const [isSaved, setIsSaved] = useState(false);
@@ -286,18 +288,18 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onBack, onUserU
             
             <button
               onClick={toggleTheme}
-              className="relative inline-flex h-9 w-16 items-center rounded-full bg-zinc-200 dark:bg-zinc-950 border border-zinc-300 dark:border-purple-950 transition-colors focus:outline-none cursor-pointer"
+              className="relative inline-flex h-8 w-16 items-center rounded-full bg-zinc-200 dark:bg-zinc-950 border border-zinc-300 dark:border-purple-950 transition-colors focus:outline-none cursor-pointer"
             >
               <div
                 className={`
-                  absolute flex items-center justify-center h-7 w-7 rounded-full bg-white dark:bg-zinc-900 transition-transform shadow-md
+                  inline-flex items-center justify-center h-6 w-6 rounded-full bg-white dark:bg-zinc-900 transition-transform shadow-md
                   ${theme === "black" ? "translate-x-8" : "translate-x-1"}
                 `}
               >
                 {theme === "black" ? (
-                  <Moon className="w-4 h-4 text-pink-500 fill-pink-500 animate-pulse" />
+                  <Moon className="w-3.5 h-3.5 text-pink-500 fill-pink-500 animate-pulse" />
                 ) : (
-                  <Sun className="w-4 h-4 text-[#FE2C55]" />
+                  <Sun className="w-3.5 h-3.5 text-[#FE2C55]" />
                 )}
               </div>
             </button>
@@ -326,6 +328,54 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onBack, onUserU
                 {currentUser.created_at ? new Date(currentUser.created_at).toLocaleDateString() : "Just now"}
               </span>
             </div>
+          </div>
+        </section>
+
+        {/* Ignored Users Section */}
+        <section className="space-y-4">
+          <h3 className="text-xs font-black tracking-widest text-[#FE2C55] uppercase flex items-center gap-2">
+            <EyeOff className="w-3.5 h-3.5" />
+            Ignored Users
+          </h3>
+          <div className="p-6 rounded-3xl theme-card border theme-border space-y-4 shadow-md bg-[var(--card-bg)]">
+            {ignoredUsers.length === 0 ? (
+              <p className="text-xs text-zinc-400 font-medium text-center py-2">
+                You haven't ignored anyone.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {ignoredUsers.map((ignored) => (
+                  <div
+                    key={ignored.ignored_username}
+                    className="flex items-center justify-between p-3 rounded-xl bg-zinc-50 dark:bg-zinc-950/40 border theme-border"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <div className={`w-8 h-8 rounded-xl flex items-center justify-center text-base
+                        ${(ignored.linker_color || 'pink') === 'pink' ? 'bg-gradient-to-br from-[#FE2C55] to-[#a855f7]' : ''}
+                        ${(ignored.linker_color || 'pink') === 'cyan' ? 'bg-gradient-to-br from-[#25F4EE] to-[#3b82f6]' : ''}
+                        ${(ignored.linker_color || 'pink') === 'purple' ? 'bg-gradient-to-br from-[#a855f7] to-[#FE2C55]' : ''}
+                        ${(ignored.linker_color || 'pink') === 'gold' ? 'bg-gradient-to-br from-[#eab308] to-[#FE2C55]' : ''}
+                        ${(ignored.linker_color || 'pink') === 'green' ? 'bg-gradient-to-br from-[#22c55e] to-[#25F4EE]' : ''}
+                        ${(ignored.linker_color || 'pink') === 'blue' ? 'bg-gradient-to-br from-[#3b82f6] to-[#a855f7]' : ''}
+                        text-white`}
+                      >
+                        {ignored.linker_avatar || "👾"}
+                      </div>
+                      <div>
+                        <p className="text-xs font-black theme-text-primary">{ignored.nickname || ignored.ignored_username}</p>
+                        <p className="text-[10px] text-zinc-400">@{ignored.ignored_username}</p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => onUnignoreUser(ignored.ignored_username)}
+                      className="text-[9px] font-black uppercase tracking-wider px-2.5 py-1.5 rounded-lg border border-zinc-600/30 bg-zinc-500/5 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700/50 transition cursor-pointer"
+                    >
+                      Unignore
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </section>
 

@@ -102,3 +102,25 @@ export interface MediaRecord {
   encrypted_key: string | null;
   created_at: number;
 }
+
+// v1.8 — Social controls
+export interface IgnoredUser {
+  id: number;
+  ignorer_username: string;
+  ignored_username: string;
+  created_at: number;
+  // Joined from users table
+  nickname?: string;
+  linker_avatar?: string;
+  linker_color?: string;
+}
+
+export interface LinkerProfileTarget {
+  username: string;
+  nickname: string;
+  links: number;
+  linker_avatar?: string;
+  linker_color?: string;
+  isFriend: boolean;
+  isIgnored: boolean;
+}

@@ -12,12 +12,13 @@ import { Inbox } from "./components/Inbox";
 import { Chat } from "./components/Chat";
 import { Settings } from "./components/Settings";
 import { Profile } from "./components/Profile";
+import { LinkerProfile } from "./components/LinkerProfile";
 import { LinkerGenerator } from "./components/LinkerGenerator";
 import { ParticleBurst } from "./components/ParticleBurst";
 import { IOSInstallBanner } from "./components/IOSInstallBanner";
 import { SnapNotificationQueue, SnapNotificationItem } from "./components/SnapNotification";
 import { wsService } from "./lib/ws";
-import { User, Friendship, Conversation, TimerState } from "./types";
+import { User, Friendship, Conversation, TimerState, LinkerProfileTarget, IgnoredUser } from "./types";
 import { RefreshCw, Signal, SignalZero, WifiOff, Gift } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -116,7 +117,9 @@ function MainApp() {
   const [discoverUsers, setDiscoverUsers] = useState<{ username: string; nickname: string; links: number; linker_avatar?: string; linker_color?: string }[]>([]);
 
   // Screens and view parameters
-  const [view, setView] = useState<"welcome" | "login" | "onboarding" | "inbox" | "chat" | "settings" | "profile" | "generator">("welcome");
+  const [view, setView] = useState<"welcome" | "login" | "onboarding" | "inbox" | "chat" | "settings" | "profile" | "generator" | "linker_profile">("welcome");
+  const [linkerProfileTarget, setLinkerProfileTarget] = useState<LinkerProfileTarget | null>(null);
+  const [ignoredUsers, setIgnoredUsers] = useState<IgnoredUser[]>([]);
   const [activeChatFriend, setActiveChatFriend] = useState<{ username: string; nickname: string; links: number } | null>(null);
   const [activeConversationId, setActiveConversationId] = useState<number | null>(null);
 
@@ -234,6 +237,9 @@ function MainApp() {
           setConversations(data.conversations || []);
           setTimers(data.timers || []);
           setDiscoverUsers(data.discoverUsers || []);
+          if (data.ignoredUsers) {
+            setIgnoredUsers(data.ignoredUsers);
+          }
           break;
 
         case "LINKS_EARNED":
@@ -325,6 +331,10 @@ function MainApp() {
 
   const handleTriggerLinksRewardOverlay = (amount: number, reason: string) => {
     setRewardBurst({ amount, reason });
+  };
+
+  const handleUnignoreUser = (username: string) => {
+    wsService.send({ type: "UNIGNORE_USER", targetUsername: username });
   };
 
   // Convert friendships list into simple contacts models list
@@ -429,6 +439,10 @@ function MainApp() {
           onOpenProfile={() => setView("profile")}
           onOpenGenerator={() => setView("generator")}
           onLogOut={handleLogOut}
+          onOpenLinkerProfile={(target) => {
+            setLinkerProfileTarget(target);
+            setView("linker_profile");
+          }}
           addSnapNotification={addSnapNotification}
         />
       )}
@@ -458,6 +472,22 @@ function MainApp() {
           onBack={() => setView("inbox")}
           onUserUpdate={(updated) => setCurrentUser(updated)}
           onLogOut={handleLogOut}
+          ignoredUsers={ignoredUsers}
+          onUnignoreUser={handleUnignoreUser}
+        />
+      )}
+
+      {view === "linker_profile" && currentUser && linkerProfileTarget && (
+        <LinkerProfile
+          currentUser={currentUser}
+          target={linkerProfileTarget}
+          onBack={() => {
+            setView("inbox");
+            setLinkerProfileTarget(null);
+          }}
+          onActionComplete={() => {
+            // syncUser will fire from the server — no manual state refresh needed
+          }}
         />
       )}
 
