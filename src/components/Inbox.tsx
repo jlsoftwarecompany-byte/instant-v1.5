@@ -377,83 +377,78 @@ export const Inbox: React.FC<InboxProps> = ({
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, scale: 0.95 }}
                       transition={{ type: "spring", stiffness: 450, damping: 28, delay: idx * 0.05 }}
-                      className="p-4 flex items-center justify-between"
+                      className="flex flex-col"
                     >
-                      {/* Left: avatar + name (tap → linker profile) */}
-                      <div
-                        className="flex items-center gap-3.5 flex-1 min-w-0 cursor-pointer group"
-                        onClick={() => {
-                          onOpenLinkerProfile({
-                            username: friend.username,
-                            nickname: friend.nickname,
-                            links: friend.links,
-                            linker_avatar: friend.linker_avatar,
-                            linker_color: friend.linker_color,
-                            isFriend: true,
-                            isIgnored: false,
-                          });
-                        }}
-                      >
-                        <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-2xl shrink-0 select-none shadow-lg group-hover:scale-105 transition-transform text-white
-                          ${(friend.linker_color || 'pink') === 'pink' ? 'bg-gradient-to-br from-[#FE2C55] to-[#a855f7]' : ''}
-                          ${(friend.linker_color || 'pink') === 'cyan' ? 'bg-gradient-to-br from-[#25F4EE] to-[#3b82f6]' : ''}
-                          ${(friend.linker_color || 'pink') === 'purple' ? 'bg-gradient-to-br from-[#a855f7] to-[#FE2C55]' : ''}
-                          ${(friend.linker_color || 'pink') === 'gold' ? 'bg-gradient-to-br from-[#eab308] to-[#FE2C55]' : ''}
-                          ${(friend.linker_color || 'pink') === 'green' ? 'bg-gradient-to-br from-[#22c55e] to-[#25F4EE]' : ''}
-                          ${(friend.linker_color || 'pink') === 'blue' ? 'bg-gradient-to-br from-[#3b82f6] to-[#a855f7]' : ''}`}>
-                          {friend.linker_avatar || "👾"}
-                        </div>
+                      {/* ── Main row: avatar + name LEFT | last message + button RIGHT ── */}
+                      <div className="px-4 pt-4 pb-3 flex items-center justify-between gap-3">
 
-                        <div className="text-left min-w-0">
-                          <h3 className="font-extrabold text-sm text-zinc-900 dark:text-white flex items-center gap-1.5 leading-none uppercase truncate group-hover:underline">
-                            {friend.nickname}
-                          </h3>
-                          <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                            <span className="text-xs text-zinc-400">@{friend.username}</span>
-                            <span className="text-[10px] font-black text-amber-500 bg-amber-500/10 px-1.5 py-0.5 rounded">
-                              ⭐ {friend.links}
-                            </span>
-                            {showAwaiting && (
-                              <span className="text-[9px] font-black text-amber-500 bg-amber-500/5 border border-amber-500/20 px-1.5 py-0.5 rounded-md uppercase tracking-wide">
-                                ⏳ Awaiting
+                        {/* Left: avatar + name — tap → linker profile */}
+                        <div
+                          className="flex items-center gap-3.5 flex-1 min-w-0 cursor-pointer group"
+                          onClick={() => {
+                            onOpenLinkerProfile({
+                              username: friend.username,
+                              nickname: friend.nickname,
+                              links: friend.links,
+                              linker_avatar: friend.linker_avatar,
+                              linker_color: friend.linker_color,
+                              isFriend: true,
+                              isIgnored: false,
+                            });
+                          }}
+                        >
+                          <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-2xl shrink-0 select-none shadow-lg group-hover:scale-105 transition-transform text-white
+                            ${(friend.linker_color || 'pink') === 'pink'   ? 'bg-gradient-to-br from-[#FE2C55] to-[#a855f7]' : ''}
+                            ${(friend.linker_color || 'pink') === 'cyan'   ? 'bg-gradient-to-br from-[#25F4EE] to-[#3b82f6]' : ''}
+                            ${(friend.linker_color || 'pink') === 'purple' ? 'bg-gradient-to-br from-[#a855f7] to-[#FE2C55]' : ''}
+                            ${(friend.linker_color || 'pink') === 'gold'   ? 'bg-gradient-to-br from-[#eab308] to-[#FE2C55]' : ''}
+                            ${(friend.linker_color || 'pink') === 'green'  ? 'bg-gradient-to-br from-[#22c55e] to-[#25F4EE]' : ''}
+                            ${(friend.linker_color || 'pink') === 'blue'   ? 'bg-gradient-to-br from-[#3b82f6] to-[#a855f7]' : ''}`}>
+                            {friend.linker_avatar || "👾"}
+                          </div>
+
+                          <div className="text-left min-w-0">
+                            <h3 className="font-extrabold text-sm text-zinc-900 dark:text-white flex items-center gap-1.5 leading-none uppercase truncate group-hover:underline">
+                              {friend.nickname}
+                            </h3>
+                            <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                              <span className="text-[11px] font-black text-amber-500 flex items-center gap-0.5">
+                                ⭐ {friend.links}
                               </span>
-                            )}
-                            {showRespond && (
-                              <motion.span
-                                initial={{ scale: 0.85, opacity: 0 }}
-                                animate={{ scale: 1, opacity: 1 }}
-                                transition={{ type: "spring", stiffness: 500, damping: 20 }}
-                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg font-black text-[10px] tracking-wide uppercase
-                                  bg-gradient-to-r from-[#25F4EE] to-[#a855f7] text-zinc-950
-                                  shadow-[0_0_10px_rgba(37,244,238,0.4)] border border-[#25F4EE]/40 animate-pulse"
-                              >
-                                💬 Respond
-                              </motion.span>
-                            )}
-                            {hasTimer && !showAwaiting && !showRespond && (
-                              <span className="text-[9px] font-black text-rose-500 bg-rose-500/5 border border-rose-500/15 px-1.5 py-0.5 rounded-md uppercase tracking-wide flex items-center gap-1 animate-pulse">
-                                <Clock className="w-2.5 h-2.5" /> Live
-                              </span>
-                            )}
+                              {showAwaiting && (
+                                <span className="text-[9px] font-black text-amber-500 bg-amber-500/5 border border-amber-500/20 px-1.5 py-0.5 rounded-md uppercase tracking-wide">
+                                  ⏳ Awaiting
+                                </span>
+                              )}
+                              {showRespond && (
+                                <motion.span
+                                  initial={{ scale: 0.85, opacity: 0 }}
+                                  animate={{ scale: 1, opacity: 1 }}
+                                  transition={{ type: "spring", stiffness: 500, damping: 20 }}
+                                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg font-black text-[10px] tracking-wide uppercase
+                                    bg-gradient-to-r from-[#25F4EE] to-[#a855f7] text-zinc-950
+                                    shadow-[0_0_10px_rgba(37,244,238,0.4)] border border-[#25F4EE]/40 animate-pulse"
+                                >
+                                  💬 Respond
+                                </motion.span>
+                              )}
+                              {hasTimer && !showAwaiting && !showRespond && (
+                                <span className="text-[9px] font-black text-rose-500 bg-rose-500/5 border border-rose-500/15 px-1.5 py-0.5 rounded-md uppercase tracking-wide flex items-center gap-1 animate-pulse">
+                                  <Clock className="w-2.5 h-2.5" /> Live
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
-                      </div>
 
-                      {/* Right: conditional panel — NEW CHAT button OR live conversation panel */}
-                      <div className="shrink-0 ml-3 w-[48%]" onClick={(e) => e.stopPropagation()}>
-                        {conversationIsLive ? (
-                          /* ── LIVE CONVERSATION PANEL ── */
-                          <motion.button
-                            whileTap={{ scale: 0.98 }}
-                            onClick={() => { onStartNewConversation(friend, convId); }}
-                            className="w-full h-[52px] rounded-2xl border theme-border bg-zinc-50 dark:bg-zinc-900/60
-                              flex flex-col justify-between overflow-hidden cursor-pointer
-                              hover:bg-zinc-100 dark:hover:bg-zinc-800/80 transition-colors"
-                          >
-                            {/* Last message preview */}
-                            <div className="flex-1 px-3 pt-2 flex items-center min-h-0">
+                        {/* Right: last message preview (when live) + action button */}
+                        <div className="flex items-center gap-2.5 shrink-0">
+
+                          {/* Last message — unboxed, right-aligned, only when conversation is live */}
+                          {conversationIsLive && (
+                            <div className="max-w-[110px] text-right hidden sm:block">
                               {lastMsg ? (
-                                <p className="text-[10px] font-semibold text-zinc-500 dark:text-zinc-400 truncate leading-tight w-full text-left">
+                                <p className="text-[11px] text-zinc-500 dark:text-zinc-400 truncate leading-snug">
                                   {lastMsg.is_photo
                                     ? "📷 Photo"
                                     : lastMsg.sender.toLowerCase() === currentUser.username.toLowerCase()
@@ -462,47 +457,55 @@ export const Inbox: React.FC<InboxProps> = ({
                                   }
                                 </p>
                               ) : (
-                                <p className="text-[10px] font-semibold text-zinc-400 italic truncate w-full text-left">
-                                  {showAwaiting ? "Waiting for reply…" : showRespond ? "Tap to respond!" : "Active…"}
+                                <p className="text-[11px] text-zinc-400 italic truncate">
+                                  {showAwaiting ? "Waiting…" : showRespond ? "Tap to reply" : "Active"}
                                 </p>
                               )}
                             </div>
+                          )}
 
-                            {/* Timer bar */}
-                            <div className="h-[5px] w-full bg-zinc-200 dark:bg-zinc-800 relative overflow-hidden">
-                              {timerPercent !== null ? (
-                                <motion.div
-                                  className={`h-full absolute left-0 top-0 rounded-r-full transition-none
-                                    ${timerPercent > 50
-                                      ? "bg-gradient-to-r from-emerald-500 to-cyan-400"
-                                      : timerPercent > 20
-                                        ? "bg-gradient-to-r from-amber-400 to-orange-400"
-                                        : "bg-gradient-to-r from-rose-500 to-pink-500"
-                                    }`}
-                                  style={{ width: `${timerPercent}%` }}
-                                />
-                              ) : (
-                                /* Opener awaiting — show a pulsing placeholder bar */
-                                <div className="h-full w-full bg-gradient-to-r from-[#25F4EE]/40 to-[#a855f7]/40 animate-pulse" />
-                              )}
-                            </div>
-                          </motion.button>
-                        ) : (
-                          /* ── NEW CHAT BUTTON ── */
+                          {/* Action button — icon-only when live, wide NEW CHAT when idle */}
                           <motion.button
-                            whileTap={{ scale: 0.95 }}
-                            onClick={() => { onStartNewConversation(friend, convId); }}
-                            className="w-full h-[52px] flex items-center justify-center gap-2 rounded-2xl
-                              bg-gradient-to-r from-[#FE2C55] to-[#a855f7]
-                              text-white font-black text-[11px] uppercase tracking-widest
-                              shadow-md shadow-pink-500/20
-                              hover:opacity-90 active:scale-95 transition cursor-pointer"
+                            whileTap={{ scale: 0.93 }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onStartNewConversation(friend, convId);
+                            }}
+                            title={conversationIsLive ? "Open conversation" : "Start new conversation"}
+                            className={`h-10 flex items-center justify-center gap-1.5 rounded-xl font-black text-[11px] uppercase tracking-wider transition cursor-pointer
+                              ${conversationIsLive
+                                ? "w-10 bg-zinc-100 dark:bg-zinc-900 border theme-border text-zinc-500 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-800"
+                                : "px-4 bg-gradient-to-r from-[#FE2C55] to-[#a855f7] text-white shadow-md shadow-pink-500/20 hover:opacity-90"
+                              }`}
                           >
-                            <MessageSquarePlus className="w-4 h-4 shrink-0" />
-                            New Chat
+                            <MessageSquarePlus className="w-[18px] h-[18px] shrink-0" />
+                            {!conversationIsLive && <span>New Chat</span>}
                           </motion.button>
-                        )}
+
+                        </div>
                       </div>
+
+                      {/* ── Timer bar — full width, pinned to row bottom just above divider ── */}
+                      {conversationIsLive && (
+                        <div className="h-[3px] w-full bg-zinc-100 dark:bg-zinc-800/60 overflow-hidden">
+                          {timerPercent !== null ? (
+                            <div
+                              className={`h-full transition-none
+                                ${timerPercent > 50
+                                  ? "bg-gradient-to-r from-emerald-500 to-cyan-400"
+                                  : timerPercent > 20
+                                    ? "bg-gradient-to-r from-amber-400 to-orange-400"
+                                    : "bg-gradient-to-r from-rose-500 to-pink-500"
+                                }`}
+                              style={{ width: `${timerPercent}%` }}
+                            />
+                          ) : (
+                            /* Opener awaiting — steady pulsing bar */
+                            <div className="h-full w-full bg-gradient-to-r from-[#25F4EE]/50 to-[#a855f7]/50 animate-pulse" />
+                          )}
+                        </div>
+                      )}
+
                     </motion.div>
                   );
                 })}
