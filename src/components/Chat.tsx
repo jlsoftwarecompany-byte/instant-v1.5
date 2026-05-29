@@ -105,14 +105,40 @@ export const Chat: React.FC<ChatProps> = ({
             setOpenerInitiator(data.openerInitiator ?? null);
             if (data.openerTimerChoice !== undefined) setOpenerTimerChoice(data.openerTimerChoice);
 
-            // Start the countdown that matches this message's timer kind
-            const newTimer: TimerState = {
-              conversation_id: conversationId,
-              timer_type: data.message.message_type === "opener" ? "opener" : "normal",
-              started_at: data.message.sent_at,
-              duration_ms: data.message.timer_duration
+            // Cumulative extension: in the active phase, each normal reply ADDS
+            // its duration to the running timer instead of replacing it. Openers
+            // and the first reply (opener response) start fresh so the long
+            // opener window is never carried into the active chat.
+            const isOpener = data.message.message_type === "opener";
+            const added = data.message.timer_duration;
+            const contributor = {
+              username: data.message.sender,
+              added_at: data.message.sent_at,
+              duration_ms: added
             };
-            setActiveTimer(newTimer);
+            setActiveTimer(prev => {
+              const canExtend = !!prev && prev.timer_type === "normal" && !isOpener;
+              if (!canExtend) {
+                return {
+                  conversation_id: conversationId,
+                  timer_type: isOpener ? "opener" : "normal",
+                  started_at: data.message.sent_at,
+                  duration_ms: added,
+                  cumulative_duration_ms: added,
+                  original_duration_ms: added,
+                  contributors: [contributor]
+                };
+              }
+              // Extend: keep started_at so the absolute expiry simply pushes out
+              // by `added` (new_expiry = old_expiry + added) — drift-free, and
+              // remaining = prevRemaining + added.
+              return {
+                ...prev,
+                duration_ms: prev.duration_ms + added,
+                cumulative_duration_ms: (prev.cumulative_duration_ms ?? prev.duration_ms) + added,
+                contributors: [...(prev.contributors ?? []), contributor]
+              };
+            });
           }
           break;
 
@@ -210,6 +236,11 @@ export const Chat: React.FC<ChatProps> = ({
         // fallback; this just makes deletion feel instant). Opener expiry only
         // resets the opener and never deletes.
         if (activeTimer.timer_type === "normal") {
+          const lastContributor = activeTimer.contributors?.at(-1)?.username;
+          if (lastContributor) {
+            const isMine = lastContributor.toLowerCase() === currentUser.username.toLowerCase();
+            triggerToast(isMine ? "Your timer ran out — chat expired." : `${lastContributor}'s timer ran out — chat expired.`);
+          }
           wsService.send({ type: "CHAT_EXPIRED_DELETE", conversationId });
         }
         clearInterval(interval);
@@ -485,6 +516,25 @@ export const Chat: React.FC<ChatProps> = ({
         )}
         <div ref={messagesEndRef} />
       </div>
+
+      {/* Cumulative timer extension — shows who's keeping the chat alive (active phase only) */}
+      {activeTimer && activeTimer.timer_type === "normal" && (activeTimer.contributors?.length ?? 0) >= 2 && (
+        <div className="px-4 py-3 border-t border-b theme-border bg-gradient-to-r from-cyan-500/5 to-purple-500/5 flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-zinc-500 overflow-x-auto">
+          <span className="shrink-0 text-cyan-400 animate-pulse">⚡</span>
+          <span className="shrink-0 text-zinc-600 dark:text-zinc-400">Timer extended by:</span>
+          <div className="flex flex-nowrap gap-2 items-center">
+            {activeTimer.contributors!.map((contrib) => (
+              <span
+                key={`${contrib.username}-${contrib.added_at}`}
+                className="shrink-0 px-2 py-0.5 bg-white/10 dark:bg-zinc-800/50 rounded border border-cyan-400/30 text-cyan-500 flex items-center gap-1"
+              >
+                <span>{contrib.username}</span>
+                <span className="text-[8px] font-bold text-zinc-400">+{Math.round(contrib.duration_ms / 1000)}s</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Initiator is locked out until their opener gets a response */}
       {saveStatus !== "saved" && isWaitingForResponse && (

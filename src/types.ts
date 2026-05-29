@@ -68,6 +68,17 @@ export interface TimerState {
   timer_type: 'opener' | 'normal' | 'response' | 'cooldown';
   started_at: number;
   duration_ms: number;
+  // Cumulative extension (v1.7): in the active phase each normal reply ADDS its
+  // duration to the running timer instead of replacing it. duration_ms always
+  // holds the running total measured from started_at, so countdown math is
+  // unchanged. contributors is a best-effort live-session list for the UI.
+  cumulative_duration_ms?: number;
+  original_duration_ms?: number;
+  contributors?: Array<{
+    username: string;
+    added_at: number;
+    duration_ms: number;
+  }>;
 }
 
 // v1.5 — Social graph
