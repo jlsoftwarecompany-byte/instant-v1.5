@@ -142,6 +142,28 @@ try {
     );
   `);
 } catch (e) {}
+// v1.8 — Permanent saved conversations
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS saved_conversations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      conversation_id INTEGER NOT NULL,
+      participant_1 TEXT NOT NULL,
+      participant_2 TEXT NOT NULL,
+      saved_by TEXT NOT NULL,
+      saved_at INTEGER NOT NULL
+    );
+  `);
+} catch (e) {}
+try {
+  db.exec("ALTER TABLE conversations ADD COLUMN saved_permanently INTEGER DEFAULT 0");
+} catch (e) {}
+try {
+  db.exec("ALTER TABLE conversations ADD COLUMN saved_by TEXT");
+} catch (e) {}
+try {
+  db.exec("ALTER TABLE conversations ADD COLUMN saved_at INTEGER");
+} catch (e) {}
 
 // Web Push setup
 let vapidPublic = process.env.VAPID_PUBLIC_KEY || "";
@@ -175,6 +197,9 @@ const clients = new Map<string, WebSocket>();
 
 // In-memory set of notified 60s expirations to avoid multiple push triggers
 const notified60sTimers = new Set<string>();
+
+// v1.8 — 60s post-explosion save windows: convId → delete timeout
+const saveWindowTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
 // Rate limiting track failed login attempts per username: { count: number, lockedUntil: number }
 const loginFailures = new Map<string, { count: number; lockedUntil: number }>();
@@ -348,6 +373,25 @@ function broadcastFriendUpdateForUser(username: string) {
     WHERE LOWER(c.participant_1) = ? OR LOWER(c.participant_2) = ?
   `).all(uLower, uLower) as any[];
 
+  // v1.8 — permanently saved conversations for the Saved Chats tab
+  const savedConversations = db.prepare(`
+    SELECT sc.*,
+           u.username as other_username,
+           u.nickname as other_nickname,
+           u.linker_avatar as other_avatar,
+           u.linker_color as other_color,
+           (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = sc.conversation_id) as message_count
+    FROM saved_conversations sc
+    JOIN users u ON (
+      CASE
+        WHEN LOWER(sc.participant_1) = LOWER(?) THEN LOWER(u.username) = LOWER(sc.participant_2)
+        ELSE LOWER(u.username) = LOWER(sc.participant_1)
+      END
+    )
+    WHERE LOWER(sc.participant_1) = LOWER(?) OR LOWER(sc.participant_2) = LOWER(?)
+    ORDER BY sc.saved_at DESC
+  `).all(uLower, uLower, uLower) as any[];
+
   // Send update directly to this user if online
   const socket = clients.get(uLower);
   if (socket && socket.readyState === WebSocket.OPEN) {
@@ -358,6 +402,7 @@ function broadcastFriendUpdateForUser(username: string) {
       conversations,
       discoverUsers,
       ignoredUsers: ignoredUserDetails,
+      savedConversations,
       timers: timers.map(t => ({
         conversation_id: t.conversation_id,
         timer_type: t.timer_type,
@@ -406,6 +451,31 @@ function archiveChat(convId: number) {
   }
   syncUserFullData(convRow.participant_1);
   syncUserFullData(convRow.participant_2);
+
+  // Start 60-second window for users to save. If neither saves, delete forever.
+  const existing = saveWindowTimers.get(convId);
+  if (existing) clearTimeout(existing);
+
+  const deleteTimeout = setTimeout(() => {
+    const freshConv = db.prepare("SELECT * FROM conversations WHERE id = ?").get(convId) as any;
+    // Only delete if not saved during the window
+    if (freshConv && !freshConv.saved_permanently) {
+      db.prepare("DELETE FROM messages WHERE conversation_id = ?").run(convId);
+      db.prepare("DELETE FROM conversations WHERE id = ?").run(convId);
+      db.prepare("DELETE FROM timers WHERE conversation_id = ?").run(convId);
+
+      const forcePayload = JSON.stringify({ type: "FORCE_TO_INBOX", conversationId: convId });
+      for (const uname of [convRow.participant_1, convRow.participant_2]) {
+        const sock = clients.get(uname.toLowerCase());
+        if (sock && sock.readyState === WebSocket.OPEN) sock.send(forcePayload);
+      }
+      syncUserFullData(convRow.participant_1);
+      syncUserFullData(convRow.participant_2);
+    }
+    saveWindowTimers.delete(convId);
+  }, 60_000);
+
+  saveWindowTimers.set(convId, deleteTimeout);
 }
 
 // WS Connection main routing
@@ -1218,124 +1288,79 @@ wss.on("connection", (ws) => {
           break;
         }
 
-        case "REVIVE_CONVERSATION": {
+        // ── Save a conversation permanently (costs 10 links, unilateral) ────
+        case "SAVE_CONVERSATION": {
           if (!authenticatedUser) return;
           const convId = parseInt(data.conversationId, 10);
           if (isNaN(convId)) return;
 
-          const convRow = db.prepare("SELECT * FROM conversations WHERE id = ?").get(convId) as any;
-          if (!convRow) { ws.send(JSON.stringify({ type: "REVIVE_FAILED", reason: "Conversation not found" })); return; }
-
-          const isParticipant =
-            convRow.participant_1.toLowerCase() === authenticatedUser ||
-            convRow.participant_2.toLowerCase() === authenticatedUser;
-          if (!isParticipant) { ws.send(JSON.stringify({ type: "REVIVE_FAILED", reason: "Unauthorized" })); return; }
-          if (!convRow.archived) { ws.send(JSON.stringify({ type: "REVIVE_FAILED", reason: "Conversation is not archived" })); return; }
-
-          const REVIVE_COST = 3;
-          const userRow = db.prepare("SELECT links FROM users WHERE LOWER(username) = ?").get(authenticatedUser) as any;
-          if (!userRow || userRow.links < REVIVE_COST) {
-            ws.send(JSON.stringify({ type: "REVIVE_FAILED", reason: `Not enough links — need ${REVIVE_COST}` }));
+          const conv = db.prepare("SELECT * FROM conversations WHERE id = ?").get(convId) as any;
+          if (!conv) {
+            ws.send(JSON.stringify({ type: "SAVE_FAILED", reason: "Conversation not found" }));
             return;
           }
 
-          db.prepare("UPDATE users SET links = links - ? WHERE LOWER(username) = ?").run(REVIVE_COST, authenticatedUser);
-          // Keep archived_at — it marks the snapshot boundary (messages before it are the previous round)
-          db.prepare(
-            "UPDATE conversations SET archived = 0, phase = 'awaiting_response', opener_initiator = NULL, opener_timer_choice = NULL WHERE id = ?"
-          ).run(convId);
-
-          const newLinks = (db.prepare("SELECT links FROM users WHERE LOWER(username) = ?").get(authenticatedUser) as any).links;
-          ws.send(JSON.stringify({ type: "REVIVE_SUCCESS", conversationId: convId, links: newLinks }));
-          syncUserFullData(convRow.participant_1);
-          syncUserFullData(convRow.participant_2);
-          break;
-        }
-
-        case "END_CHAT_REQUEST": {
-          if (!authenticatedUser) return;
-          const convId = parseInt(data.conversationId, 10);
-          if (isNaN(convId)) return;
-
-          const convRow = db.prepare("SELECT * FROM conversations WHERE id = ?").get(convId) as any;
-          if (convRow) {
-            const partner = convRow.participant_1.toLowerCase() === authenticatedUser 
-              ? convRow.participant_2.toLowerCase() 
-              : convRow.participant_1.toLowerCase();
-
-            // Real-time broadcast or Push Notification
-            const partnerSocket = clients.get(partner);
-            if (partnerSocket && partnerSocket.readyState === WebSocket.OPEN) {
-              partnerSocket.send(JSON.stringify({
-                type: "END_CHAT_REQUEST_BROADCAST",
-                conversationId: convId,
-                from: authenticatedUser
-              }));
-            } else {
-              // Send scenario B Web Push
-              const userRow = db.prepare("SELECT nickname FROM users WHERE LOWER(username) = ?").get(authenticatedUser) as any;
-              await sendPushNotification(
-                partner,
-                `${userRow?.nickname || authenticatedUser} wants to save your conversation`,
-                "Tap to review and save before the timer runs out.",
-                { conversationId: convId, requestSave: true }
-              );
-            }
+          const isParticipant =
+            conv.participant_1.toLowerCase() === authenticatedUser ||
+            conv.participant_2.toLowerCase() === authenticatedUser;
+          if (!isParticipant) {
+            ws.send(JSON.stringify({ type: "SAVE_FAILED", reason: "Unauthorized" }));
+            return;
           }
-          break;
-        }
 
-        case "END_CHAT_CONFIRM": {
-          if (!authenticatedUser) return;
-          const convId = parseInt(data.conversationId, 10);
-          if (isNaN(convId)) return;
+          if (!conv.archived) {
+            ws.send(JSON.stringify({ type: "SAVE_FAILED", reason: "Conversation has not exploded yet" }));
+            return;
+          }
+          if (conv.saved_permanently === 1) {
+            ws.send(JSON.stringify({ type: "SAVE_FAILED", reason: "Already saved" }));
+            return;
+          }
 
-          const convRow = db.prepare("SELECT * FROM conversations WHERE id = ?").get(convId) as any;
-          if (convRow) {
-            // Calculate ending reward using log_1.2(x)
-            const countRow = db.prepare("SELECT COUNT(*) as count FROM messages WHERE conversation_id = ?").get(convId) as any;
-            const finalCount = countRow ? countRow.count : 0;
-            const finalReward = Math.max(1, Math.ceil(Math.log(finalCount || 1) / Math.log(1.2)));
+          const SAVE_COST = 10;
+          const userRow = db.prepare("SELECT links FROM users WHERE LOWER(username) = ?").get(authenticatedUser) as any;
+          if (!userRow || userRow.links < SAVE_COST) {
+            ws.send(JSON.stringify({ type: "SAVE_FAILED", reason: `Not enough links — need ${SAVE_COST}` }));
+            return;
+          }
 
-            // Apply reward to both
-            db.prepare("UPDATE users SET links = links + ? WHERE LOWER(username) = ?").run(finalReward, convRow.participant_1.toLowerCase());
-            db.prepare("UPDATE users SET links = links + ? WHERE LOWER(username) = ?").run(finalReward, convRow.participant_2.toLowerCase());
+          const now = Date.now();
+          const partner =
+            conv.participant_1.toLowerCase() === authenticatedUser
+              ? conv.participant_2.toLowerCase()
+              : conv.participant_1.toLowerCase();
 
-            // Mark saved and delete timers
-            db.prepare("UPDATE conversations SET saved = 1 WHERE id = ?").run(convId);
-            db.prepare("DELETE FROM timers WHERE conversation_id = ?").run(convId);
+          db.prepare("UPDATE users SET links = links - ? WHERE LOWER(username) = ?").run(SAVE_COST, authenticatedUser);
+          db.prepare("UPDATE conversations SET saved_permanently = 1, saved_by = ?, saved_at = ? WHERE id = ?").run(authenticatedUser, now, convId);
+          db.prepare("INSERT INTO saved_conversations (conversation_id, participant_1, participant_2, saved_by, saved_at) VALUES (?, ?, ?, ?, ?)").run(convId, conv.participant_1, conv.participant_2, authenticatedUser, now);
 
-            // Fetch fresh balances
-            const u1 = db.prepare("SELECT links FROM users WHERE LOWER(username) = ?").get(convRow.participant_1.toLowerCase()) as any;
-            const u2 = db.prepare("SELECT links FROM users WHERE LOWER(username) = ?").get(convRow.participant_2.toLowerCase()) as any;
+          // Cancel the 60s delete window for this conversation (if running)
+          const pending = saveWindowTimers.get(convId);
+          if (pending) {
+            clearTimeout(pending);
+            saveWindowTimers.delete(convId);
+          }
 
-            // Broadcast success
-            const sockets = [
-              clients.get(convRow.participant_1.toLowerCase()),
-              clients.get(convRow.participant_2.toLowerCase())
-            ];
+          const updatedUser = db.prepare("SELECT links FROM users WHERE LOWER(username) = ?").get(authenticatedUser) as any;
 
-            const responsePayload = JSON.stringify({
-              type: "CONVERSATION_SAVED_SUCCESS",
+          ws.send(JSON.stringify({
+            type: "SAVE_SUCCESS",
+            conversationId: convId,
+            savedBy: authenticatedUser,
+            links: updatedUser?.links ?? 0
+          }));
+
+          const partnerSocket = clients.get(partner);
+          if (partnerSocket && partnerSocket.readyState === WebSocket.OPEN) {
+            partnerSocket.send(JSON.stringify({
+              type: "CONVERSATION_SAVED_BY_PARTNER",
               conversationId: convId,
-              finalReward
-            });
-
-            sockets.forEach((s, idx) => {
-              if (s && s.readyState === WebSocket.OPEN) {
-                s.send(responsePayload);
-                s.send(JSON.stringify({
-                  type: "LINKS_EARNED",
-                  amount: finalReward,
-                  reason: "Conversation saved successfully",
-                  links: idx === 0 ? u1.links : u2.links
-                }));
-              }
-            });
-
-            syncUserFullData(convRow.participant_1);
-            syncUserFullData(convRow.participant_2);
+              savedBy: authenticatedUser
+            }));
           }
+
+          syncUserFullData(conv.participant_1);
+          syncUserFullData(conv.participant_2);
           break;
         }
       }
@@ -1393,45 +1418,6 @@ const timerMonitorInterval = setInterval(() => {
         syncUserFullData(convRow.participant_2);
       }
       continue;
-    }
-
-    // 2. Check for Scenario A: Timer hits exactly or crosses 60 seconds remaining
-    // If remaining is <= 60 seconds (but of course > 0)
-    if (remainingMs <= 60000 && remainingMs > 0) {
-      const timerKey = `${timer.id}_60s`;
-      if (!notified60sTimers.has(timerKey)) {
-        notified60sTimers.add(timerKey);
-
-        // Figure out user(s) to push notification to if offline
-        // Typically the recipient of the active message is the one who needs to action it!
-        // Let's find latest message in conversation
-        const lastMsg = db.prepare(`
-          SELECT * FROM messages 
-          WHERE conversation_id = ? 
-          ORDER BY sent_at DESC LIMIT 1
-        `).get(convId) as any;
-
-        if (lastMsg) {
-          const targetOfflineUser = lastMsg.receiver.toLowerCase();
-          const targetSocket = clients.get(targetOfflineUser);
-          
-          if (!targetSocket || targetSocket.readyState !== WebSocket.OPEN) {
-            // Recipient is offline -> send web push scenario A
-            sendPushNotification(
-              targetOfflineUser,
-              "Your conversation is expiring soon",
-              "You have 60 seconds to save your conversation before it's gone.",
-              { conversationId: convId, warning60s: true }
-            );
-          } else {
-            // Trigger SAVE_TIMER_WARNING to online client
-            targetSocket.send(JSON.stringify({
-              type: "SAVE_TIMER_WARNING",
-              conversationId: convId
-            }));
-          }
-        }
-      }
     }
   }
 }, 5000);

@@ -119,6 +119,7 @@ export class ChatRoom {
   // In-memory connection registry — valid within a single DO lifetime
   private clients = new Map<string, WebSocket>();
   private notified60sTimers = new Set<string>();
+  private saveWindowTimers: Map<number, ReturnType<typeof setTimeout>> = new Map();
   private loginFailures = new Map<
     string,
     { count: number; lockedUntil: number }
@@ -1076,47 +1077,8 @@ export class ChatRoom {
         break;
       }
 
-      // ── Revive an archived conversation (costs 3 links) ───────────────────
-      case "REVIVE_CONVERSATION": {
-        if (!authedUser) return;
-        const convId = parseInt(data.conversationId, 10);
-        if (isNaN(convId)) return;
-
-        const convRow = await db.prepare("SELECT * FROM conversations WHERE id = ?").bind(convId).first<any>();
-        if (!convRow) { ws.send(JSON.stringify({ type: "REVIVE_FAILED", reason: "Conversation not found" })); return; }
-
-        const isParticipant =
-          convRow.participant_1.toLowerCase() === authedUser ||
-          convRow.participant_2.toLowerCase() === authedUser;
-        if (!isParticipant) { ws.send(JSON.stringify({ type: "REVIVE_FAILED", reason: "Unauthorized" })); return; }
-        if (!convRow.archived) { ws.send(JSON.stringify({ type: "REVIVE_FAILED", reason: "Conversation is not archived" })); return; }
-
-        const REVIVE_COST = 3;
-        const userRow = await db.prepare("SELECT links FROM users WHERE LOWER(username) = ?").bind(authedUser).first<any>();
-        if (!userRow || userRow.links < REVIVE_COST) {
-          ws.send(JSON.stringify({ type: "REVIVE_FAILED", reason: `Not enough links — need ${REVIVE_COST}` }));
-          return;
-        }
-
-        await db.batch([
-          db.prepare("UPDATE users SET links = links - ? WHERE LOWER(username) = ?").bind(REVIVE_COST, authedUser),
-          // Keep archived_at — it marks the snapshot boundary (messages before it are the previous round)
-          db.prepare(
-            "UPDATE conversations SET archived = 0, phase = 'awaiting_response', opener_initiator = NULL, opener_timer_choice = NULL WHERE id = ?"
-          ).bind(convId),
-        ]);
-
-        const updatedUser = await db.prepare("SELECT links FROM users WHERE LOWER(username) = ?").bind(authedUser).first<any>();
-        ws.send(JSON.stringify({ type: "REVIVE_SUCCESS", conversationId: convId, links: updatedUser?.links ?? 0 }));
-        await Promise.all([
-          this.syncUser(convRow.participant_1),
-          this.syncUser(convRow.participant_2),
-        ]);
-        break;
-      }
-
-      // ── Request to end (save) chat ────────────────────────────────────────
-      case "END_CHAT_REQUEST": {
+      // ── Save a conversation permanently (costs 10 links, unilateral) ──────
+      case "SAVE_CONVERSATION": {
         if (!authedUser) return;
         const convId = parseInt(data.conversationId, 10);
         if (isNaN(convId)) return;
@@ -1125,75 +1087,93 @@ export class ChatRoom {
           .prepare("SELECT * FROM conversations WHERE id = ?")
           .bind(convId)
           .first<any>();
-        if (!conv) return;
+        if (!conv) {
+          ws.send(JSON.stringify({ type: "SAVE_FAILED", reason: "Conversation not found" }));
+          return;
+        }
 
+        const isParticipant =
+          conv.participant_1.toLowerCase() === authedUser ||
+          conv.participant_2.toLowerCase() === authedUser;
+        if (!isParticipant) {
+          ws.send(JSON.stringify({ type: "SAVE_FAILED", reason: "Unauthorized" }));
+          return;
+        }
+
+        // Only saveable if recently exploded (archived = 1) and not already saved
+        if (!conv.archived) {
+          ws.send(JSON.stringify({ type: "SAVE_FAILED", reason: "Conversation has not exploded yet" }));
+          return;
+        }
+        if (conv.saved_permanently === 1) {
+          ws.send(JSON.stringify({ type: "SAVE_FAILED", reason: "Already saved" }));
+          return;
+        }
+
+        const SAVE_COST = 10;
+        const userRow = await db
+          .prepare("SELECT links FROM users WHERE LOWER(username) = ?")
+          .bind(authedUser)
+          .first<any>();
+
+        if (!userRow || userRow.links < SAVE_COST) {
+          ws.send(JSON.stringify({ type: "SAVE_FAILED", reason: `Not enough links — need ${SAVE_COST}` }));
+          return;
+        }
+
+        const now = Date.now();
         const partner =
           conv.participant_1.toLowerCase() === authedUser
             ? conv.participant_2.toLowerCase()
             : conv.participant_1.toLowerCase();
 
+        await db.batch([
+          // Deduct 10 links from the saver only
+          db.prepare("UPDATE users SET links = links - ? WHERE LOWER(username) = ?").bind(SAVE_COST, authedUser),
+          // Mark the conversation as permanently saved
+          db.prepare(
+            "UPDATE conversations SET saved_permanently = 1, saved_by = ?, saved_at = ? WHERE id = ?"
+          ).bind(authedUser, now, convId),
+          // Insert into saved_conversations for querying in the Saved Chats tab
+          db.prepare(
+            "INSERT INTO saved_conversations (conversation_id, participant_1, participant_2, saved_by, saved_at) VALUES (?, ?, ?, ?, ?)"
+          ).bind(convId, conv.participant_1, conv.participant_2, authedUser, now),
+        ]);
+
+        // Cancel the 60s delete alarm for this conversation (if running)
+        const pending = this.saveWindowTimers.get(convId);
+        if (pending) {
+          clearTimeout(pending);
+          this.saveWindowTimers.delete(convId);
+        }
+
+        const updatedUser = await db
+          .prepare("SELECT links FROM users WHERE LOWER(username) = ?")
+          .bind(authedUser)
+          .first<any>();
+
+        // Notify the saver
+        ws.send(JSON.stringify({
+          type: "SAVE_SUCCESS",
+          conversationId: convId,
+          savedBy: authedUser,
+          links: updatedUser?.links ?? 0
+        }));
+
+        // Notify the partner (so their dialog also closes)
         const partnerWs = this.clients.get(partner);
         if (partnerWs?.readyState === WebSocket.OPEN) {
-          partnerWs.send(JSON.stringify({ type: "END_CHAT_REQUEST_BROADCAST", conversationId: convId, from: authedUser }));
-        } else {
-          const userRow = await db
-            .prepare("SELECT nickname FROM users WHERE LOWER(username) = ?")
-            .bind(authedUser)
-            .first<any>();
-          await this.push(
-            partner,
-            `${userRow?.nickname || authedUser} wants to save your conversation`,
-            "Tap to review and save before the timer runs out.",
-            { conversationId: convId, requestSave: true }
-          );
+          partnerWs.send(JSON.stringify({
+            type: "CONVERSATION_SAVED_BY_PARTNER",
+            conversationId: convId,
+            savedBy: authedUser
+          }));
         }
-        break;
-      }
 
-      // ── Confirm end (save) chat ───────────────────────────────────────────
-      case "END_CHAT_CONFIRM": {
-        if (!authedUser) return;
-        const convId = parseInt(data.conversationId, 10);
-        if (isNaN(convId)) return;
-
-        const conv = await db
-          .prepare("SELECT * FROM conversations WHERE id = ?")
-          .bind(convId)
-          .first<any>();
-        if (!conv) return;
-
-        const countRow = await db
-          .prepare("SELECT COUNT(*) as count FROM messages WHERE conversation_id = ?")
-          .bind(convId)
-          .first<any>();
-        const finalCount = countRow?.count || 0;
-        const finalReward = Math.max(1, Math.ceil(Math.log(finalCount || 1) / Math.log(1.2)));
-
-        const p1 = conv.participant_1.toLowerCase();
-        const p2 = conv.participant_2.toLowerCase();
-
-        await db.batch([
-          db.prepare("UPDATE users SET links = links + ? WHERE LOWER(username) = ?").bind(finalReward, p1),
-          db.prepare("UPDATE users SET links = links + ? WHERE LOWER(username) = ?").bind(finalReward, p2),
-          db.prepare("UPDATE conversations SET saved = 1 WHERE id = ?").bind(convId),
-          db.prepare("DELETE FROM timers WHERE conversation_id = ?").bind(convId),
+        await Promise.all([
+          this.syncUser(conv.participant_1),
+          this.syncUser(conv.participant_2),
         ]);
-
-        const [u1, u2] = await Promise.all([
-          db.prepare("SELECT links FROM users WHERE LOWER(username) = ?").bind(p1).first<any>(),
-          db.prepare("SELECT links FROM users WHERE LOWER(username) = ?").bind(p2).first<any>(),
-        ]);
-
-        const savePayload = JSON.stringify({ type: "CONVERSATION_SAVED_SUCCESS", conversationId: convId, finalReward });
-        [[this.clients.get(p1), u1], [this.clients.get(p2), u2]].forEach(([sock, u]) => {
-          const s = sock as WebSocket | undefined;
-          if (s?.readyState === WebSocket.OPEN) {
-            s.send(savePayload);
-            s.send(JSON.stringify({ type: "LINKS_EARNED", amount: finalReward, reason: "Conversation saved successfully", links: (u as any)?.links }));
-          }
-        });
-
-        await Promise.all([this.syncUser(p1), this.syncUser(p2)]);
         break;
       }
 
@@ -1322,6 +1302,28 @@ export class ChatRoom {
       .bind(uLower, uLower)
       .all<any>();
 
+    // v1.8 — permanently saved conversations for the Saved Chats tab
+    const { results: savedConvs } = await db
+      .prepare(
+        `SELECT sc.*,
+                u.username as other_username,
+                u.nickname as other_nickname,
+                u.linker_avatar as other_avatar,
+                u.linker_color as other_color,
+                (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = sc.conversation_id) as message_count
+         FROM saved_conversations sc
+         JOIN users u ON (
+           CASE
+             WHEN LOWER(sc.participant_1) = LOWER(?) THEN LOWER(u.username) = LOWER(sc.participant_2)
+             ELSE LOWER(u.username) = LOWER(sc.participant_1)
+           END
+         )
+         WHERE LOWER(sc.participant_1) = LOWER(?) OR LOWER(sc.participant_2) = LOWER(?)
+         ORDER BY sc.saved_at DESC`
+      )
+      .bind(uLower, uLower, uLower)
+      .all<any>();
+
     const sock = this.clients.get(uLower);
     if (sock?.readyState === WebSocket.OPEN) {
       sock.send(
@@ -1332,6 +1334,7 @@ export class ChatRoom {
           conversations,
           discoverUsers,
           ignoredUsers: ignoredUserDetails,
+          savedConversations: savedConvs,
           timers: timers.map((t) => ({
             conversation_id: t.conversation_id,
             timer_type: t.timer_type,
@@ -1397,6 +1400,41 @@ export class ChatRoom {
       this.syncUser(convRow.participant_1),
       this.syncUser(convRow.participant_2),
     ]);
+
+    // Start 60-second window for users to save. If neither saves, delete forever.
+    const existing = this.saveWindowTimers.get(convId);
+    if (existing) clearTimeout(existing);
+
+    const deleteTimeout = setTimeout(async () => {
+      const freshConv = await db
+        .prepare("SELECT * FROM conversations WHERE id = ?")
+        .bind(convId)
+        .first<any>();
+
+      // Only delete if not saved during the window
+      if (freshConv && !freshConv.saved_permanently) {
+        await db.batch([
+          db.prepare("DELETE FROM messages WHERE conversation_id = ?").bind(convId),
+          db.prepare("DELETE FROM conversations WHERE id = ?").bind(convId),
+          db.prepare("DELETE FROM timers WHERE conversation_id = ?").bind(convId),
+        ]);
+
+        // Force both clients back to inbox
+        const forcePayload = JSON.stringify({ type: "FORCE_TO_INBOX", conversationId: convId });
+        for (const uname of [convRow.participant_1, convRow.participant_2]) {
+          const sock = this.clients.get(uname.toLowerCase());
+          if (sock?.readyState === WebSocket.OPEN) sock.send(forcePayload);
+        }
+
+        await Promise.all([
+          this.syncUser(convRow.participant_1),
+          this.syncUser(convRow.participant_2),
+        ]);
+      }
+      this.saveWindowTimers.delete(convId);
+    }, 60_000);
+
+    this.saveWindowTimers.set(convId, deleteTimeout);
   }
 
   // Replaces setInterval(checkTimers, 5000) — invoked via Durable Object alarm
@@ -1438,31 +1476,6 @@ export class ChatRoom {
           ]);
         }
         continue;
-      }
-
-      if (remainingMs <= 60_000) {
-        const timerKey = `${timer.id}_60s`;
-        if (!this.notified60sTimers.has(timerKey)) {
-          this.notified60sTimers.add(timerKey);
-          const lastMsg = await db
-            .prepare("SELECT * FROM messages WHERE conversation_id = ? ORDER BY sent_at DESC LIMIT 1")
-            .bind(convId)
-            .first<any>();
-          if (lastMsg) {
-            const receiver = lastMsg.receiver.toLowerCase();
-            const recvWs = this.clients.get(receiver);
-            if (!recvWs || recvWs.readyState !== WebSocket.OPEN) {
-              await this.push(
-                receiver,
-                "Your conversation is expiring soon",
-                "You have 60 seconds to save your conversation before it's gone.",
-                { conversationId: convId, warning60s: true }
-              );
-            } else {
-              recvWs.send(JSON.stringify({ type: "SAVE_TIMER_WARNING", conversationId: convId }));
-            }
-          }
-        }
       }
     }
   }

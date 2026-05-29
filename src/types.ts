@@ -37,6 +37,25 @@ export interface Conversation {
   // v1.7 — Archive & Revival
   archived?: number; // 0 or 1
   archived_at?: number | null;
+  // v1.8 — Permanent save
+  saved_permanently?: number; // 0 or 1
+  saved_by?: string | null;
+  saved_at?: number | null;
+}
+
+export interface SavedConversation {
+  id: number;
+  conversation_id: number;
+  participant_1: string;
+  participant_2: string;
+  saved_by: string;
+  saved_at: number;
+  // Joined fields from conversations/messages (provided by API)
+  other_username?: string;
+  other_nickname?: string;
+  other_avatar?: string;
+  other_color?: string;
+  message_count?: number;
 }
 
 export interface Timer {

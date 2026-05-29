@@ -1,14 +1,16 @@
 import React, { useState, useEffect } from "react";
-import { User, Friendship, Conversation, LinkerProfileTarget } from "../types";
+import { User, Friendship, Conversation, LinkerProfileTarget, SavedConversation } from "../types";
 import { wsService } from "../lib/ws";
 import { SnapNotificationItem } from "./SnapNotification";
 import {
   Plus, Settings, User as UserIcon, Star, MessageSquarePlus,
   Send, UserX, UserCheck, AlertCircle, Sparkles, MessageCircle,
-  Clock, Flame, Heart, Archive
+  Clock, Flame, Heart, BookOpen
 } from "lucide-react";
 import { useTheme } from "./ThemeContext";
 import { motion, AnimatePresence } from "motion/react";
+
+type FriendInfo = { username: string; nickname: string; links: number; linker_avatar?: string; linker_color?: string };
 
 interface InboxProps {
   currentUser: User;
@@ -17,7 +19,10 @@ interface InboxProps {
   activeConversations: Conversation[];
   timersList: any[];
   discoverUsers: { username: string; nickname: string; links: number; linker_avatar?: string; linker_color?: string }[];
-  onOpenChat: (contact: { username: string; nickname: string; links: number; linker_avatar?: string; linker_color?: string }, conversationId: number) => void;
+  savedConversations: SavedConversation[];
+  onStartNewConversation: (friend: FriendInfo, conversationId: number) => void;
+  onOpenSavedChat: (saved: SavedConversation) => void;
+  onOpenSavedConversations?: (friend: FriendInfo) => void;
   onOpenSettings: () => void;
   onOpenProfile: () => void;
   onOpenGenerator: () => void;
@@ -33,7 +38,10 @@ export const Inbox: React.FC<InboxProps> = ({
   activeConversations: activeConversationsRaw,
   timersList,
   discoverUsers = [],
-  onOpenChat,
+  savedConversations = [],
+  onStartNewConversation,
+  onOpenSavedChat,
+  onOpenSavedConversations,
   onOpenSettings,
   onOpenProfile,
   onOpenGenerator,
@@ -43,8 +51,11 @@ export const Inbox: React.FC<InboxProps> = ({
 }) => {
   const { theme } = useTheme();
 
-  // All conversations (active + archived shown inline)
+  // Active conversations
   const activeConversations = activeConversationsRaw || [];
+
+  // Inbox tab: live Messages vs permanently Saved Chats
+  const [activeTab, setActiveTab] = useState<"messages" | "saved">("messages");
 
   // Add friend states
   const [showAddFriendModal, setShowAddFriendModal] = useState(false);
@@ -128,29 +139,6 @@ export const Inbox: React.FC<InboxProps> = ({
         }
       }
 
-      // Conversation revived notification
-      if (data.type === "CONVERSATION_REVIVED" || data.type === "ARCHIVE_RESTORED") {
-        const conversationId = data.conversationId;
-        const conversation = activeConversationsRaw.find(c => c.id === conversationId);
-
-        if (conversation && addSnapNotification) {
-          const otherUsername = conversation.participant_1.toLowerCase() === currentUser.username.toLowerCase()
-            ? conversation.participant_2
-            : conversation.participant_1;
-
-          const otherNickname = allUsersMap[otherUsername]?.nickname || otherUsername;
-
-          addSnapNotification({
-            type: "conversation_revived",
-            title: `Chat with ${otherNickname} revived!`,
-            subtitle: "An archived conversation is active again",
-            icon: <Archive className="w-5 h-5" />,
-            accentColor: "border-purple-500/30 bg-purple-500/5",
-            textColor: "text-purple-600 dark:text-purple-400",
-            duration: 5000
-          });
-        }
-      }
     };
 
     const cleanup = wsService.registerListener(handleNotificationEvent);
@@ -272,10 +260,41 @@ export const Inbox: React.FC<InboxProps> = ({
         </div>
       </header>
 
+      {/* Tab bar — Messages vs Saved Chats */}
+      <div className="flex border-b theme-border bg-[var(--background)] sticky top-[72px] z-30">
+        <button
+          onClick={() => setActiveTab("messages")}
+          className={`flex-1 py-3 text-[11px] font-black uppercase tracking-widest transition
+            ${activeTab === "messages"
+              ? "text-pink-500 border-b-2 border-pink-500"
+              : "text-zinc-400 hover:text-zinc-300"
+            }`}
+        >
+          Messages
+        </button>
+        <button
+          onClick={() => setActiveTab("saved")}
+          className={`flex-1 py-3 text-[11px] font-black uppercase tracking-widest transition flex items-center justify-center gap-1.5
+            ${activeTab === "saved"
+              ? "text-pink-500 border-b-2 border-pink-500"
+              : "text-zinc-400 hover:text-zinc-300"
+            }`}
+        >
+          <BookOpen className="w-3.5 h-3.5" />
+          Saved Chats
+          {savedConversations.length > 0 && (
+            <span className="w-4 h-4 rounded-full bg-emerald-500 text-white text-[8px] font-black flex items-center justify-center">
+              {savedConversations.length}
+            </span>
+          )}
+        </button>
+      </div>
+
       {/* Main Container contents */}
       <main className="flex-1 w-full flex flex-col">
 
         {/* Active Conversations list — flush to header, full width */}
+        {activeTab === "messages" && (
         <section>
           <h2 className="text-[11px] font-bold tracking-[0.2em] text-zinc-400 uppercase px-6 pt-5 pb-2">
             Messages
@@ -305,7 +324,7 @@ export const Inbox: React.FC<InboxProps> = ({
                       ? String(conv.opener_initiator).toLowerCase()
                       : null;
                     const iAmInit = !!openerInit && openerInit === currentUser.username;
-                    const mustRespond = !conv?.saved && !conv?.archived && phase === "awaiting_response" && !!openerInit && !iAmInit;
+                    const mustRespond = !conv?.saved && phase === "awaiting_response" && !!openerInit && !iAmInit;
                     return mustRespond ? -1 : 0;
                   };
                   return getScore(a) - getScore(b);
@@ -314,7 +333,6 @@ export const Inbox: React.FC<InboxProps> = ({
                   const hasTimer = convId ? getConversationTimerText(convId) : null;
                   const conversation = activeConversations.find(c => c.id === convId);
                   const isSaved = conversation?.saved === 1;
-                  const isRowArchived = conversation?.archived === 1;
 
                   // Two-phase opener status (Prompt 1)
                   const phase = conversation?.phase || "awaiting_response";
@@ -322,8 +340,8 @@ export const Inbox: React.FC<InboxProps> = ({
                     ? String(conversation.opener_initiator).toLowerCase()
                     : null;
                   const iAmInitiator = !!openerInit && openerInit === currentUser.username;
-                  const showAwaiting = !isSaved && !isRowArchived && phase === "awaiting_response" && !!openerInit && iAmInitiator;
-                  const showRespond = !isSaved && !isRowArchived && phase === "awaiting_response" && !!openerInit && !iAmInitiator;
+                  const showAwaiting = !isSaved && phase === "awaiting_response" && !!openerInit && iAmInitiator;
+                  const showRespond = !isSaved && phase === "awaiting_response" && !!openerInit && !iAmInitiator;
 
                   return (
                     <motion.div
@@ -332,15 +350,12 @@ export const Inbox: React.FC<InboxProps> = ({
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, scale: 0.95 }}
                       transition={{ type: "spring", stiffness: 450, damping: 28, delay: idx * 0.05 }}
-                      whileHover={{ scale: 1.01, x: 2, backgroundColor: theme === "black" ? "#140e2b" : "#fbf8ff" }}
-                      whileTap={{ scale: 0.995 }}
-                      onClick={() => convId && onOpenChat(friend, convId)}
-                      className={`p-5 flex items-center justify-between cursor-pointer transition-colors ${isRowArchived ? "opacity-60" : ""}`}
+                      className="p-4 flex items-center justify-between"
                     >
+                      {/* Left: avatar + name (tap → linker profile) */}
                       <div
                         className="flex items-center gap-3.5 flex-1 min-w-0 cursor-pointer group"
-                        onClick={(e) => {
-                          e.stopPropagation();
+                        onClick={() => {
                           onOpenLinkerProfile({
                             username: friend.username,
                             nickname: friend.nickname,
@@ -352,76 +367,88 @@ export const Inbox: React.FC<InboxProps> = ({
                           });
                         }}
                       >
-                        <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-2xl shrink-0 select-none shadow-lg group-hover:scale-105 transition-transform
-                          ${isRowArchived
-                            ? "bg-zinc-700/40 border border-zinc-600/30 grayscale text-zinc-400"
-                            : `text-white
-                              ${(friend.linker_color || 'pink') === 'pink' ? 'bg-gradient-to-br from-[#FE2C55] to-[#a855f7]' : ''}
-                              ${(friend.linker_color || 'pink') === 'cyan' ? 'bg-gradient-to-br from-[#25F4EE] to-[#3b82f6]' : ''}
-                              ${(friend.linker_color || 'pink') === 'purple' ? 'bg-gradient-to-br from-[#a855f7] to-[#FE2C55]' : ''}
-                              ${(friend.linker_color || 'pink') === 'gold' ? 'bg-gradient-to-br from-[#eab308] to-[#FE2C55]' : ''}
-                              ${(friend.linker_color || 'pink') === 'green' ? 'bg-gradient-to-br from-[#22c55e] to-[#25F4EE]' : ''}
-                              ${(friend.linker_color || 'pink') === 'blue' ? 'bg-gradient-to-br from-[#3b82f6] to-[#a855f7]' : ''}`
-                          }`}>
+                        <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-2xl shrink-0 select-none shadow-lg group-hover:scale-105 transition-transform text-white
+                          ${(friend.linker_color || 'pink') === 'pink' ? 'bg-gradient-to-br from-[#FE2C55] to-[#a855f7]' : ''}
+                          ${(friend.linker_color || 'pink') === 'cyan' ? 'bg-gradient-to-br from-[#25F4EE] to-[#3b82f6]' : ''}
+                          ${(friend.linker_color || 'pink') === 'purple' ? 'bg-gradient-to-br from-[#a855f7] to-[#FE2C55]' : ''}
+                          ${(friend.linker_color || 'pink') === 'gold' ? 'bg-gradient-to-br from-[#eab308] to-[#FE2C55]' : ''}
+                          ${(friend.linker_color || 'pink') === 'green' ? 'bg-gradient-to-br from-[#22c55e] to-[#25F4EE]' : ''}
+                          ${(friend.linker_color || 'pink') === 'blue' ? 'bg-gradient-to-br from-[#3b82f6] to-[#a855f7]' : ''}`}>
                           {friend.linker_avatar || "👾"}
                         </div>
 
                         <div className="text-left min-w-0">
-                          <h3 className="font-extrabold text-sm theme-text-primary flex items-center gap-1.5 leading-none uppercase group-hover:underline">
+                          <h3 className="font-extrabold text-sm theme-text-primary flex items-center gap-1.5 leading-none uppercase truncate group-hover:underline">
                             {friend.nickname}
-                            {isSaved && (
-                              <span className="text-[8px] px-1.5 py-0.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 rounded-sm font-black tracking-wide uppercase">
-                                Saved
-                              </span>
-                            )}
-                            {isRowArchived && (
-                              <span className="text-[8px] px-1.5 py-0.5 bg-zinc-500/10 border border-zinc-500/20 text-zinc-500 rounded-sm font-black tracking-wide uppercase">
-                                💥 Exploded
-                              </span>
-                            )}
                           </h3>
-                          <div className="flex items-center gap-1.5 mt-1">
+                          <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                             <span className="text-xs text-zinc-400">@{friend.username}</span>
-                            <span className="text-[10px] font-black text-amber-500 bg-amber-500/10 px-1.5 py-0.2 rounded">
+                            <span className="text-[10px] font-black text-amber-500 bg-amber-500/10 px-1.5 py-0.5 rounded">
                               ⭐ {friend.links}
                             </span>
+                            {showAwaiting && (
+                              <span className="text-[9px] font-black text-amber-500 bg-amber-500/5 border border-amber-500/20 px-1.5 py-0.5 rounded-md uppercase tracking-wide">
+                                ⏳ Awaiting
+                              </span>
+                            )}
+                            {showRespond && (
+                              <motion.span
+                                initial={{ scale: 0.85, opacity: 0 }}
+                                animate={{ scale: 1, opacity: 1 }}
+                                transition={{ type: "spring", stiffness: 500, damping: 20 }}
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg font-black text-[10px] tracking-wide uppercase
+                                  bg-gradient-to-r from-[#25F4EE] to-[#a855f7] text-zinc-950
+                                  shadow-[0_0_10px_rgba(37,244,238,0.4)] border border-[#25F4EE]/40 animate-pulse"
+                              >
+                                💬 Respond
+                              </motion.span>
+                            )}
+                            {hasTimer && !showAwaiting && !showRespond && (
+                              <span className="text-[9px] font-black text-rose-500 bg-rose-500/5 border border-rose-500/15 px-1.5 py-0.5 rounded-md uppercase tracking-wide flex items-center gap-1 animate-pulse">
+                                <Clock className="w-2.5 h-2.5" /> Live
+                              </span>
+                            )}
                           </div>
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-3">
-                        {isRowArchived && (
-                          <span className="px-2 py-0.5 text-[9px] font-black text-zinc-500 bg-zinc-500/5 border border-zinc-500/15 rounded-md tracking-wider uppercase flex items-center gap-1">
-                            Tap to revive
-                          </span>
-                        )}
-                        {!isRowArchived && showAwaiting && (
-                          <span className="px-2 py-0.5 text-[9px] font-black text-amber-500 bg-amber-500/5 border border-amber-500/20 rounded-md tracking-wider uppercase flex items-center gap-1">
-                            ⏳ Awaiting response
-                          </span>
-                        )}
-                        {!isRowArchived && showRespond && (
-                          <motion.span
-                            initial={{ scale: 0.85, opacity: 0 }}
-                            animate={{ scale: 1, opacity: 1 }}
-                            transition={{ type: "spring", stiffness: 500, damping: 20 }}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-black text-[11px] tracking-wide uppercase cursor-pointer select-none
-                              bg-gradient-to-r from-[#25F4EE] to-[#a855f7]
-                              text-zinc-950
-                              shadow-[0_0_14px_rgba(37,244,238,0.45)]
-                              border border-[#25F4EE]/40
-                              animate-pulse
-                            "
-                          >
-                            💬 Click to respond
-                          </motion.span>
-                        )}
-                        {!isRowArchived && hasTimer && !isSaved && !showAwaiting && !showRespond && (
-                          <span className="px-2 py-0.5 text-[9px] font-black text-rose-500 bg-rose-500/5 border border-rose-500/15 rounded-md tracking-wider uppercase flex items-center gap-1 animate-pulse">
-                            <Clock className="w-2.5 h-2.5 shrink-0" />
-                            EXPIRY RUNNING
-                          </span>
-                        )}
+                      {/* Right: two icon action buttons */}
+                      <div className="flex items-center gap-2 shrink-0 ml-3">
+                        {/* Start / open the live conversation */}
+                        <motion.button
+                          whileTap={{ scale: 0.90 }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (convId) onStartNewConversation(friend, convId);
+                          }}
+                          title="Start new conversation"
+                          className="w-10 h-10 flex items-center justify-center rounded-xl
+                            bg-gradient-to-br from-[#FE2C55]/10 to-[#a855f7]/10
+                            border border-[#FE2C55]/20
+                            text-[#FE2C55] hover:from-[#FE2C55]/20 hover:to-[#a855f7]/20
+                            transition active:scale-90 cursor-pointer"
+                        >
+                          <MessageSquarePlus className="w-[18px] h-[18px]" />
+                        </motion.button>
+
+                        {/* View past saved conversations */}
+                        <motion.button
+                          whileTap={{ scale: 0.90 }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (onOpenSavedConversations) onOpenSavedConversations(friend);
+                            else setActiveTab("saved");
+                          }}
+                          title="View saved conversations"
+                          className="w-10 h-10 flex items-center justify-center rounded-xl
+                            bg-zinc-100 dark:bg-zinc-900
+                            border theme-border
+                            text-zinc-500 dark:text-zinc-300
+                            hover:bg-zinc-200 dark:hover:bg-zinc-800
+                            transition active:scale-90 cursor-pointer"
+                        >
+                          <BookOpen className="w-[18px] h-[18px]" />
+                        </motion.button>
                       </div>
                     </motion.div>
                   );
@@ -430,8 +457,77 @@ export const Inbox: React.FC<InboxProps> = ({
             )}
           </div>
         </section>
+        )}
 
-        {/* Secondary sections — padded */}
+        {/* Saved Chats tab content */}
+        {activeTab === "saved" && (
+          <section className="p-4 space-y-3">
+            <h2 className="text-[11px] font-bold tracking-[0.2em] text-zinc-400 uppercase px-2 pb-2">
+              Saved Conversations
+            </h2>
+
+            {savedConversations.length === 0 ? (
+              <div className="p-10 text-center flex flex-col items-center justify-center space-y-3">
+                <div className="p-3 bg-zinc-100 dark:bg-zinc-950/70 rounded-full">
+                  <BookOpen className="w-6 h-6 text-emerald-500" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-sm theme-text-primary">No saved chats yet</h4>
+                  <p className="text-xs text-zinc-400 mt-1 max-w-[210px] mx-auto leading-relaxed">
+                    When a conversation explodes, you can save it permanently for 10 ⭐ links.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="divide-y theme-border border-b">
+                {savedConversations.map(saved => {
+                  const friend = {
+                    username: saved.other_username || "",
+                    nickname: saved.other_nickname || saved.other_username || "",
+                    links: 0,
+                    linker_avatar: saved.other_avatar,
+                    linker_color: saved.other_color,
+                  };
+                  return (
+                    <motion.div
+                      key={saved.id}
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      onClick={() => onOpenSavedChat(saved)}
+                      className="p-4 flex items-center gap-3 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-950/50 transition"
+                    >
+                      <div className={`w-11 h-11 rounded-xl flex items-center justify-center text-xl shrink-0 text-white
+                        ${(friend.linker_color || 'pink') === 'pink' ? 'bg-gradient-to-br from-[#FE2C55] to-[#a855f7]' : ''}
+                        ${(friend.linker_color || 'pink') === 'cyan' ? 'bg-gradient-to-br from-[#25F4EE] to-[#3b82f6]' : ''}
+                        ${(friend.linker_color || 'pink') === 'purple' ? 'bg-gradient-to-br from-[#a855f7] to-[#FE2C55]' : ''}
+                        ${(friend.linker_color || 'pink') === 'gold' ? 'bg-gradient-to-br from-[#eab308] to-[#FE2C55]' : ''}
+                        ${(friend.linker_color || 'pink') === 'green' ? 'bg-gradient-to-br from-[#22c55e] to-[#25F4EE]' : ''}
+                        ${(friend.linker_color || 'pink') === 'blue' ? 'bg-gradient-to-br from-[#3b82f6] to-[#a855f7]' : ''}`}>
+                        {friend.linker_avatar || "👾"}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <h3 className="font-extrabold text-sm theme-text-primary uppercase truncate">
+                          {friend.nickname}
+                        </h3>
+                        <p className="text-[10px] text-zinc-400 mt-0.5">
+                          Saved {new Date(saved.saved_at).toLocaleDateString()} · {saved.message_count ?? "?"} messages
+                        </p>
+                      </div>
+                      <div className="shrink-0">
+                        <span className="text-[9px] font-black text-emerald-600 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-md uppercase tracking-wide">
+                          💾 Saved
+                        </span>
+                      </div>
+                    </motion.div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* Secondary sections — padded (only on Messages tab) */}
+        {activeTab === "messages" && (
         <div className="px-6 space-y-8 py-6">
 
         {/* Incoming/Outgoing requests notifications list */}
@@ -582,6 +678,7 @@ export const Inbox: React.FC<InboxProps> = ({
         )}
 
         </div>
+        )}
 
       </main>
 

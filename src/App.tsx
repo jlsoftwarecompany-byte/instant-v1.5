@@ -18,7 +18,7 @@ import { ParticleBurst } from "./components/ParticleBurst";
 import { IOSInstallBanner } from "./components/IOSInstallBanner";
 import { SnapNotificationQueue, SnapNotificationItem } from "./components/SnapNotification";
 import { wsService } from "./lib/ws";
-import { User, Friendship, Conversation, TimerState, LinkerProfileTarget, IgnoredUser } from "./types";
+import { User, Friendship, Conversation, TimerState, LinkerProfileTarget, IgnoredUser, SavedConversation } from "./types";
 import { RefreshCw, Signal, SignalZero, WifiOff, Gift } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -113,14 +113,15 @@ function MainApp() {
   const [friendships, setFriendships] = useState<Friendship[]>([]);
   const [usersMap, setUsersMap] = useState<Record<string, { nickname: string; links: number; linker_avatar?: string; linker_color?: string }>>({});
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [savedConversations, setSavedConversations] = useState<SavedConversation[]>([]);
   const [timers, setTimers] = useState<TimerState[]>([]);
   const [discoverUsers, setDiscoverUsers] = useState<{ username: string; nickname: string; links: number; linker_avatar?: string; linker_color?: string }[]>([]);
 
   // Screens and view parameters
-  const [view, setView] = useState<"welcome" | "login" | "onboarding" | "inbox" | "chat" | "settings" | "profile" | "generator" | "linker_profile">("welcome");
+  const [view, setView] = useState<"welcome" | "login" | "onboarding" | "inbox" | "chat" | "settings" | "profile" | "generator" | "linker_profile" | "saved_chats">("welcome");
   const [linkerProfileTarget, setLinkerProfileTarget] = useState<LinkerProfileTarget | null>(null);
   const [ignoredUsers, setIgnoredUsers] = useState<IgnoredUser[]>([]);
-  const [activeChatFriend, setActiveChatFriend] = useState<{ username: string; nickname: string; links: number } | null>(null);
+  const [activeChatFriend, setActiveChatFriend] = useState<{ username: string; nickname: string; links: number; linker_avatar?: string; linker_color?: string } | null>(null);
   const [activeConversationId, setActiveConversationId] = useState<number | null>(null);
 
   // Link burst animation trigger overlays
@@ -237,9 +238,19 @@ function MainApp() {
           setConversations(data.conversations || []);
           setTimers(data.timers || []);
           setDiscoverUsers(data.discoverUsers || []);
+          if (data.savedConversations) {
+            setSavedConversations(data.savedConversations);
+          }
           if (data.ignoredUsers) {
             setIgnoredUsers(data.ignoredUsers);
           }
+          break;
+
+        case "FORCE_TO_INBOX":
+          // Server deleted the conversation after the 60s save window expired.
+          setView("inbox");
+          setActiveChatFriend(null);
+          setActiveConversationId(null);
           break;
 
         case "LINKS_EARNED":
@@ -268,8 +279,8 @@ function MainApp() {
           });
           break;
 
-        case "REVIVE_SUCCESS":
-          // Update user's link count after spending links on revival
+        case "SAVE_SUCCESS":
+          // Update user's link count after spending 10 links to save permanently.
           if (currentUser && typeof data.links === "number") {
             setCurrentUser(prev => prev ? { ...prev, links: data.links } : null);
             const stored = localStorage.getItem("instant-user");
@@ -430,9 +441,21 @@ function MainApp() {
           activeConversations={conversations}
           timersList={timers}
           discoverUsers={discoverUsers}
-          onOpenChat={(friend, convId) => {
+          savedConversations={savedConversations}
+          onStartNewConversation={(friend, convId) => {
             setActiveChatFriend(friend);
             setActiveConversationId(convId);
+            setView("chat");
+          }}
+          onOpenSavedChat={(saved) => {
+            setActiveChatFriend({
+              username: saved.other_username || "",
+              nickname: saved.other_nickname || saved.other_username || "",
+              links: 0,
+              linker_avatar: saved.other_avatar,
+              linker_color: saved.other_color,
+            });
+            setActiveConversationId(saved.conversation_id);
             setView("chat");
           }}
           onOpenSettings={() => setView("settings")}
@@ -453,9 +476,13 @@ function MainApp() {
           contact={activeChatFriend}
           conversationId={activeConversationId}
           initialTimers={timers}
-          initialSaved={conversations.find(c => c.id === activeConversationId)?.saved === 1}
-          initialArchived={conversations.find(c => c.id === activeConversationId)?.archived === 1}
-          initialArchivedAt={conversations.find(c => c.id === activeConversationId)?.archived_at ?? null}
+          initialSaved={(() => {
+            const c = conversations.find(c => c.id === activeConversationId);
+            // A conversation opened from Saved Chats has no live conversation row;
+            // treat it as permanently saved (read-only).
+            const isSavedConv = savedConversations.some(s => s.conversation_id === activeConversationId);
+            return c?.saved === 1 || c?.saved_permanently === 1 || isSavedConv;
+          })()}
           onBack={() => {
             setView("inbox");
             setActiveChatFriend(null);
