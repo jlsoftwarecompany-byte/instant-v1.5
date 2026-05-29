@@ -152,7 +152,7 @@ export const Inbox: React.FC<InboxProps> = ({
     <div className="flex flex-col min-h-screen bg-[var(--background)] font-sans">
       
       {/* Top Header navbar — purple→pink gradient brand bar */}
-      <header className="px-6 py-5 bg-gradient-to-br from-[#7c3aed] via-[#a855f7] to-[#FE2C55] sticky top-0 z-40 flex items-center justify-between shadow-lg">
+      <header className="px-6 py-5 pt-[calc(env(safe-area-inset-top)+20px)] bg-gradient-to-r from-[#7c3aed] via-[#a855f7] to-[#FE2C55] sticky top-0 z-40 flex items-center justify-between shadow-lg">
         <div className="flex flex-col">
           {/* instant. brand logo */}
           <h1 className="text-2xl font-black text-white lowercase leading-none tracking-tight select-none drop-shadow-sm">
