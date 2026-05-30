@@ -21,11 +21,17 @@ interface ChatProps {
   onBack: () => void;
   onLinksRewardTriggered: (amount: number, reason: string) => void;
   addSnapNotification?: (notif: Omit<SnapNotificationItem, 'id'>) => void;
+  linkEarnedForMessage?: number | null;
+  onLinkEarnedAnimationDone?: () => void;
+  forceNewChat?: boolean;
+  onChatReady?: () => void;
 }
 
 export const Chat: React.FC<ChatProps> = ({
   currentUser, contact, conversationId, initialTimers, initialSaved,
-  onBack, onLinksRewardTriggered, addSnapNotification
+  onBack, onLinksRewardTriggered, addSnapNotification,
+  linkEarnedForMessage, onLinkEarnedAnimationDone,
+  forceNewChat, onChatReady
 }) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState("");
@@ -64,6 +70,9 @@ export const Chat: React.FC<ChatProps> = ({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [savedByPartner, setSavedByPartner] = useState<string | null>(null);
 
+  // Save dialog chat preview toggle
+  const [showingChatPreview, setShowingChatPreview] = useState(false);
+
   // Feedback Toast
   const [feedbackToast, setFeedbackToast] = useState<string>("");
 
@@ -101,7 +110,8 @@ export const Chat: React.FC<ChatProps> = ({
       switch (data.type) {
         case "HISTORY_SYNC":
           if (data.conversationId === conversationId) {
-            setMessages(data.messages);
+            // Filter expired messages so fresh chat starts visually empty
+            setMessages((data.messages || []).filter((m: Message) => m.expired !== 1));
             setConversationPhase(data.phase || "awaiting_response");
             setOpenerInitiator(data.openerInitiator ?? null);
             setOpenerTimerChoice(data.openerTimerChoice ?? null);
@@ -182,8 +192,9 @@ export const Chat: React.FC<ChatProps> = ({
         case "SAVE_SUCCESS":
           if (data.conversationId === conversationId) {
             setShowSaveDialog(false);
+            setShowingChatPreview(false);
             setIsSavingConv(false);
-            onLinksRewardTriggered(0, "Conversation saved permanently! (-10 ⭐)");
+            onLinksRewardTriggered(0, "Conversation saved permanently! (-25 🔗)");
             triggerToast("💾 Conversation saved permanently!");
             onBack(); // Navigate back to inbox — conversation is now in Saved Chats
           }
@@ -207,6 +218,7 @@ export const Chat: React.FC<ChatProps> = ({
           if (data.conversationId === conversationId) {
             // 60s window expired, nobody saved — forcefully navigate back
             setShowSaveDialog(false);
+            setShowingChatPreview(false);
             onBack();
           }
           break;
@@ -329,6 +341,34 @@ export const Chat: React.FC<ChatProps> = ({
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // forceNewChat: clear state on new chat navigation so no expired message residue shows
+  useEffect(() => {
+    if (forceNewChat) {
+      setMessages([]);
+      setActiveTimer(null);
+      setTimeLeftMs(0);
+      setTimerPercentage(100);
+      setConversationPhase("awaiting_response");
+      setOpenerInitiator(null);
+      onChatReady?.();
+    }
+  }, [forceNewChat]);
+
+  // linkEarnedForMessage: set animation flag on the matching message bubble
+  useEffect(() => {
+    if (!linkEarnedForMessage) return;
+    setMessages(prev =>
+      prev.map(m => m.id === linkEarnedForMessage ? { ...m, linkEarnedAnimation: true } : m)
+    );
+    const t = setTimeout(() => {
+      setMessages(prev =>
+        prev.map(m => m.id === linkEarnedForMessage ? { ...m, linkEarnedAnimation: false } : m)
+      );
+      onLinkEarnedAnimationDone?.();
+    }, 2500);
+    return () => clearTimeout(t);
+  }, [linkEarnedForMessage]);
 
   // Setup Intersection Observer to detect when messages become visible
   useEffect(() => {
@@ -595,6 +635,7 @@ export const Chat: React.FC<ChatProps> = ({
               onExplodeComplete={(msgId) => {
                 setMessages(prev => prev.map(msg => msg.id === msgId ? { ...msg, expired: 1 } : msg));
               }}
+              linkEarnedAnimation={!!m.linkEarnedAnimation}
             />
             );
           })
@@ -608,33 +649,63 @@ export const Chat: React.FC<ChatProps> = ({
           <div className="text-5xl mb-4 animate-pulse">💥</div>
           <h3 className="text-xl font-black text-[var(--foreground)] mb-2">This chat exploded</h3>
           <p className="text-sm text-zinc-400 font-sans leading-relaxed max-w-xs mb-1">
-            Save it forever to keep every message in your Saved Chats. Otherwise it's gone for good.
+            Save it forever for 25 🔗 links. The conversation will appear in your Saved Chats permanently.
           </p>
           <p className="text-3xl font-black text-pink-500 tabular-nums my-3">{saveCountdown}s</p>
           {saveError && (
             <p className="text-xs text-rose-500 font-bold mb-2">{saveError}</p>
           )}
-          <p className="text-[11px] text-zinc-500 font-semibold mb-5">
-            Your balance: {currentUser.links}⭐
+          <p className="text-[11px] text-zinc-500 font-semibold mb-3">
+            Your balance: {currentUser.links} 🔗
           </p>
+
+          {/* View Chat toggle */}
+          <button
+            onClick={() => setShowingChatPreview(v => !v)}
+            className="text-xs font-bold text-zinc-400 hover:text-zinc-200 underline transition mb-2"
+          >
+            {showingChatPreview ? "▲ Hide chat" : "▼ View chat"}
+          </button>
+
+          {/* Scrollable read-only chat preview */}
+          {showingChatPreview && (
+            <div className="w-full max-w-xs max-h-48 overflow-y-auto rounded-2xl border theme-border bg-[var(--background)]/80 p-3 mb-3 space-y-2">
+              {messages.map((m, idx) => {
+                const isMe = m.sender.toLowerCase() === currentUser.username.toLowerCase();
+                return (
+                  <div key={m.id || idx} className={`flex ${isMe ? "justify-end" : "justify-start"}`}>
+                    <div className={`max-w-[80%] px-3 py-1.5 rounded-xl text-xs
+                      ${isMe
+                        ? "bg-gradient-to-r from-[#FE2C55]/20 to-[#a855f7]/20 text-zinc-200"
+                        : "bg-zinc-800 text-zinc-300"
+                      }`}
+                    >
+                      {m.is_photo ? "📷 Photo" : m.content}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
           <div className="flex items-center gap-3 w-full max-w-xs">
             <button
-              onClick={onBack}
+              onClick={() => { setShowingChatPreview(false); onBack(); }}
               className="flex-1 px-4 py-3 rounded-2xl text-sm font-black border theme-border text-zinc-400 hover:text-rose-500 transition active:scale-95"
             >
               Discard
             </button>
             <button
               onClick={handleSaveConversation}
-              disabled={isSavingConv || currentUser.links < 10 || saveCountdown <= 0}
+              disabled={isSavingConv || currentUser.links < 25 || saveCountdown <= 0}
               className={`flex-1 flex items-center justify-center gap-1.5 px-4 py-3 rounded-2xl text-sm font-black transition active:scale-95
-                ${!isSavingConv && currentUser.links >= 10 && saveCountdown > 0
+                ${!isSavingConv && currentUser.links >= 25 && saveCountdown > 0
                   ? "bg-gradient-to-r from-[#7c3aed] to-[#f472b6] text-white shadow-md hover:opacity-90"
                   : "bg-zinc-800 text-zinc-500 cursor-not-allowed border border-zinc-700"
                 }`}
             >
               {isSavingConv ? <Loader2 className="w-4 h-4 animate-spin" /> : <Star className="w-4 h-4" />}
-              Save · 10⭐
+              Save · 25 🔗
             </button>
           </div>
         </div>

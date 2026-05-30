@@ -164,6 +164,13 @@ try {
 try {
   db.exec("ALTER TABLE conversations ADD COLUMN saved_at INTEGER");
 } catch (e) {}
+// v1.9 — All-time links (permanent, never decrements)
+try {
+  db.exec("ALTER TABLE users ADD COLUMN all_time_links INTEGER DEFAULT 0");
+} catch (e) {}
+try {
+  db.exec("UPDATE users SET all_time_links = links WHERE all_time_links = 0 AND links > 0");
+} catch (e) {}
 
 // Web Push setup
 let vapidPublic = process.env.VAPID_PUBLIC_KEY || "";
@@ -307,19 +314,23 @@ function broadcastFriendUpdateForUser(username: string) {
   });
 
   // Fetch nickname / status mapping
-  const usersMap: Record<string, { nickname: string, links: number, linker_avatar?: string, linker_color?: string }> = {};
+  const usersMap: Record<string, { nickname: string, links: number, all_time_links?: number, linker_avatar?: string, linker_color?: string }> = {};
   if (contactNames.size > 0) {
     const placeholders = Array.from(contactNames).map(() => "?").join(",");
-    const list = db.prepare(`SELECT username, nickname, links, linker_avatar, linker_color FROM users WHERE LOWER(username) IN (${placeholders})`).all(...Array.from(contactNames)) as any[];
+    const list = db.prepare(`SELECT username, nickname, links, all_time_links, linker_avatar, linker_color FROM users WHERE LOWER(username) IN (${placeholders})`).all(...Array.from(contactNames)) as any[];
     list.forEach(u => {
-      usersMap[u.username.toLowerCase()] = { 
-        nickname: u.nickname, 
+      usersMap[u.username.toLowerCase()] = {
+        nickname: u.nickname,
         links: u.links,
+        all_time_links: u.all_time_links ?? 0,
         linker_avatar: u.linker_avatar || '👾',
         linker_color: u.linker_color || 'pink'
       };
     });
   }
+
+  // Fetch the current user's own row (for currentUser state on client)
+  const selfRow = db.prepare("SELECT username, nickname, links, all_time_links, linker_avatar, linker_color FROM users WHERE LOWER(username) = ?").get(uLower) as any;
 
   // Fetch discoverable users (other users on the app who aren't currently friends or waiting on requests)
   const allFilteredUsers = db.prepare(`
@@ -416,6 +427,10 @@ function broadcastFriendUpdateForUser(username: string) {
   if (socket && socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({
       type: "FRIEND_UPDATE",
+      user: selfRow ? {
+        links: selfRow.links,
+        all_time_links: selfRow.all_time_links ?? 0,
+      } : undefined,
       friendships,
       users: usersMap,
       conversations,
@@ -1080,7 +1095,7 @@ wss.on("connection", (ws) => {
               db.prepare("UPDATE conversations SET conversation_started = 1 WHERE id = ?").run(convId);
               
               // Trigger 1 Reward: max(1, ceil(log_1.2(1))) = 1 link
-              const grantStmt = db.prepare("UPDATE users SET links = links + 1 WHERE LOWER(username) = ?");
+              const grantStmt = db.prepare("UPDATE users SET links = links + 1, all_time_links = all_time_links + 1 WHERE LOWER(username) = ?");
               grantStmt.run(convRow.participant_1.toLowerCase());
               grantStmt.run(convRow.participant_2.toLowerCase());
 
@@ -1231,16 +1246,22 @@ wss.on("connection", (ws) => {
           const convAfter = db.prepare("SELECT message_count FROM conversations WHERE id = ?").get(convId) as any;
           const currentMessageCount = convAfter?.message_count ?? 0;
 
-          // Award links only on a successful opener response AND only while the
-          // combined message count is ≤ 10. From the 11th message on, nobody earns.
+          // 1. Opener response bonus (both users, based on timer choice)
           if (isOpenerResponse && currentMessageCount <= 10) {
             earnedLinks = openerReward(conv.opener_timer_choice ?? 0);
-            db.prepare("UPDATE users SET links = links + ? WHERE LOWER(username) = ?").run(earnedLinks, authenticatedUser);
-            db.prepare("UPDATE users SET links = links + ? WHERE LOWER(username) = ?").run(earnedLinks, target);
+            db.prepare("UPDATE users SET links = links + ?, all_time_links = all_time_links + ? WHERE LOWER(username) = ?").run(earnedLinks, earnedLinks, authenticatedUser);
+            db.prepare("UPDATE users SET links = links + ?, all_time_links = all_time_links + ? WHERE LOWER(username) = ?").run(earnedLinks, earnedLinks, target);
           }
 
-          const senderUser = db.prepare("SELECT links FROM users WHERE LOWER(username) = ?").get(authenticatedUser) as any;
-          const targetUser = db.prepare("SELECT links FROM users WHERE LOWER(username) = ?").get(target) as any;
+          // 2. Per-message sender link (1 link to sender only, up to message 10)
+          let perMsgLinkId: number | null = null;
+          if (currentMessageCount <= 10) {
+            db.prepare("UPDATE users SET links = links + 1, all_time_links = all_time_links + 1 WHERE LOWER(username) = ?").run(authenticatedUser);
+            perMsgLinkId = savedMsg.id ?? null;
+          }
+
+          const senderUser = db.prepare("SELECT links, all_time_links FROM users WHERE LOWER(username) = ?").get(authenticatedUser) as any;
+          const targetUser = db.prepare("SELECT links, all_time_links FROM users WHERE LOWER(username) = ?").get(target) as any;
 
           const targetSocket = clients.get(target);
           const senderSocket = ws;
@@ -1260,7 +1281,19 @@ wss.on("connection", (ws) => {
                 type: "LINKS_EARNED",
                 amount: earnedLinks,
                 reason: "Successful opener response",
-                links: senderUser?.links || 0
+                links: senderUser?.links || 0,
+                all_time_links: senderUser?.all_time_links || 0
+              }));
+            }
+            // Per-message award notification (triggers bubble animation)
+            if (perMsgLinkId !== null) {
+              senderSocket.send(JSON.stringify({
+                type: "LINKS_EARNED",
+                amount: 1,
+                reason: "message_sent",
+                messageId: perMsgLinkId,
+                links: senderUser?.links || 0,
+                all_time_links: senderUser?.all_time_links || 0
               }));
             }
           }
@@ -1272,7 +1305,8 @@ wss.on("connection", (ws) => {
                 type: "LINKS_EARNED",
                 amount: earnedLinks,
                 reason: "Successful opener response",
-                links: targetUser?.links || 0
+                links: targetUser?.links || 0,
+                all_time_links: targetUser?.all_time_links || 0
               }));
             }
           } else {
@@ -1397,7 +1431,7 @@ wss.on("connection", (ws) => {
             return;
           }
 
-          const SAVE_COST = 10;
+          const SAVE_COST = 25;
           const userRow = db.prepare("SELECT links FROM users WHERE LOWER(username) = ?").get(authenticatedUser) as any;
           if (!userRow || userRow.links < SAVE_COST) {
             ws.send(JSON.stringify({ type: "SAVE_FAILED", reason: `Not enough links — need ${SAVE_COST}` }));

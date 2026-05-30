@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { motion } from "motion/react";
+import { motion, AnimatePresence } from "motion/react";
 import { Message, User } from "../types";
 import { Image as ImageIcon, Camera } from "lucide-react";
 import { ParticleBurst } from "./ParticleBurst";
@@ -20,6 +20,8 @@ interface MessageBubbleProps {
   // When true, this is an archive snapshot — show content without countdown,
   // even if the message timer has naturally expired.
   isSnapshot?: boolean;
+  // When true, show the +1 🔗 earned animation on sender's bubble
+  linkEarnedAnimation?: boolean;
 }
 
 export const MessageBubble: React.FC<MessageBubbleProps> = ({
@@ -33,6 +35,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   isLatest = true,
   forceExplode = false,
   isSnapshot = false,
+  linkEarnedAnimation = false,
 }) => {
   const isMe = message.sender.toLowerCase() === currentUser.username;
   const isPhoto = message.is_photo === 1;
@@ -297,6 +300,28 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
             />
           </div>
         )}
+
+        {/* +1 🔗 link earned animation — appears on sender's bubble */}
+        <AnimatePresence>
+          {isMe && linkEarnedAnimation && (
+            <motion.div
+              key="link-earned"
+              initial={{ opacity: 0, y: 4, scale: 0.7 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -8, scale: 0.8 }}
+              transition={{ type: "spring", stiffness: 500, damping: 20 }}
+              className="flex items-center gap-1 mt-1 justify-end"
+            >
+              <motion.span
+                animate={{ scale: [1, 1.3, 1] }}
+                transition={{ duration: 0.5, repeat: 2 }}
+                className="text-[11px] font-black text-amber-400 flex items-center gap-0.5 select-none"
+              >
+                +1 🔗
+              </motion.span>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Mascot marker metadata */}
         <span className="text-[9px] text-zinc-400 mt-1 tracking-wider uppercase font-black flex items-center gap-1 select-none">

@@ -3,7 +3,7 @@ import { User, Friendship, Conversation, LinkerProfileTarget, SavedConversation 
 import { wsService } from "../lib/ws";
 import { SnapNotificationItem } from "./SnapNotification";
 import {
-  Plus, Settings, User as UserIcon, Star, MessageSquarePlus,
+  Plus, Settings, User as UserIcon, Star, MessageSquarePlus, UserPlus,
   Send, UserX, UserCheck, AlertCircle, Sparkles, MessageCircle,
   Clock, Flame, Heart, BookOpen
 } from "lucide-react";
@@ -15,7 +15,7 @@ type FriendInfo = { username: string; nickname: string; links: number; linker_av
 interface InboxProps {
   currentUser: User;
   friendshipsList: Friendship[];
-  allUsersMap: Record<string, { nickname: string; links: number; linker_avatar?: string; linker_color?: string }>;
+  allUsersMap: Record<string, { nickname: string; links: number; all_time_links?: number; linker_avatar?: string; linker_color?: string }>;
   activeConversations: Conversation[];
   timersList: any[];
   discoverUsers: { username: string; nickname: string; links: number; linker_avatar?: string; linker_color?: string }[];
@@ -238,8 +238,14 @@ export const Inbox: React.FC<InboxProps> = ({
           <h1 className="text-2xl font-black text-white lowercase leading-none tracking-tight select-none drop-shadow-sm">
             instant<span className="text-white/90">.</span>
           </h1>
-          <p className="text-[11px] text-white/70 font-semibold mt-1 leading-none">
-            {friendsList.length === 0 ? "All quiet" : `${friendsList.length} chats`}
+          <p className="text-[11px] font-black mt-1 leading-none flex items-center gap-1 text-white/90">
+            <span>⛓️</span>
+            <span style={{ background: "linear-gradient(90deg,#fbbf24,#f59e0b,#fcd34d,#f59e0b)", backgroundSize: "200% auto", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", animation: "shimmer 2s linear infinite" }}>
+              {currentUser.all_time_links ?? 0}
+            </span>
+            <span style={{ background: "linear-gradient(90deg,#fbbf24,#f59e0b,#fcd34d,#f59e0b)", backgroundSize: "200% auto", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", animation: "shimmer 2s linear infinite" }}>
+              all-time links
+            </span>
           </p>
         </div>
 
@@ -248,9 +254,9 @@ export const Inbox: React.FC<InboxProps> = ({
           <button
             onClick={() => setShowAddFriendModal(true)}
             className="w-10 h-10 flex items-center justify-center bg-white/15 hover:bg-white/25 rounded-full text-white transition active:scale-95"
-            title="Add Friend"
+            title="Add Friends"
           >
-            <MessageSquarePlus className="w-5 h-5" />
+            <UserPlus className="w-5 h-5" />
           </button>
           <button
             onClick={onOpenSettings}
@@ -309,7 +315,7 @@ export const Inbox: React.FC<InboxProps> = ({
           <h2 className="text-[11px] font-bold tracking-[0.2em] text-zinc-400 uppercase px-6 pt-5 pb-2">
             Messages
           </h2>
-          <div className="divide-y theme-border border-b">
+          <div className="border-b theme-border">
             {friendsList.length === 0 ? (
               <div className="p-10 text-center flex flex-col items-center justify-center space-y-3">
                 <div className="p-3 bg-zinc-100 dark:bg-zinc-950/70 rounded-full text-zinc-400">
@@ -324,9 +330,9 @@ export const Inbox: React.FC<InboxProps> = ({
               </div>
             ) : (
               <AnimatePresence>
-                {/* Sort: conversations with a pending opener you must respond to float to the top */}
+                {/* Sort: must-respond rows first, then by least time remaining (most urgent), idle last */}
                 {[...friendsList].sort((a, b) => {
-                  const getScore = (friend: typeof a) => {
+                  const getRemainingMs = (friend: typeof a): number => {
                     const cId = findConversationId(friend.username);
                     const conv = activeConversations.find(c => c.id === cId);
                     const phase = conv?.phase || "awaiting_response";
@@ -335,9 +341,13 @@ export const Inbox: React.FC<InboxProps> = ({
                       : null;
                     const iAmInit = !!openerInit && openerInit === currentUser.username;
                     const mustRespond = !conv?.saved && phase === "awaiting_response" && !!openerInit && !iAmInit;
-                    return mustRespond ? -1 : 0;
+                    if (mustRespond) return -Infinity;
+                    const activeTimer = cId ? timersList.find(t => t.conversation_id === cId) : null;
+                    if (!activeTimer) return Infinity;
+                    const elapsed = Date.now() - activeTimer.started_at;
+                    return activeTimer.duration_ms - elapsed;
                   };
-                  return getScore(a) - getScore(b);
+                  return getRemainingMs(a) - getRemainingMs(b);
                 }).map((friend, idx) => {
                   const convId = findConversationId(friend.username);
                   const hasTimer = convId ? getConversationTimerText(convId) : null;
@@ -380,12 +390,16 @@ export const Inbox: React.FC<InboxProps> = ({
                       className="flex flex-col"
                     >
                       {/* ── Main row: avatar + name LEFT | last message + button RIGHT ── */}
-                      <div className="px-4 pt-4 pb-3 flex items-center justify-between gap-3">
+                      <div
+                        className="px-4 pt-4 pb-3 flex items-center justify-between gap-3 cursor-pointer"
+                        onClick={() => onStartNewConversation(friend, convId)}
+                      >
 
                         {/* Left: avatar + name — tap → linker profile */}
                         <div
                           className="flex items-center gap-3.5 flex-1 min-w-0 cursor-pointer group"
-                          onClick={() => {
+                          onClick={(e) => {
+                            e.stopPropagation();
                             onOpenLinkerProfile({
                               username: friend.username,
                               nickname: friend.nickname,
@@ -446,9 +460,15 @@ export const Inbox: React.FC<InboxProps> = ({
 
                           {/* Last message — unboxed, right-aligned, only when conversation is live */}
                           {conversationIsLive && (
-                            <div className="max-w-[110px] text-right hidden sm:block">
+                            <div
+                              className="max-w-[110px] text-right block cursor-pointer"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onStartNewConversation(friend, convId);
+                              }}
+                            >
                               {lastMsg ? (
-                                <p className="text-[11px] text-zinc-500 dark:text-zinc-400 truncate leading-snug">
+                                <p className="text-[11px] text-zinc-500 dark:text-zinc-400 truncate leading-snug hover:text-zinc-300 transition-colors">
                                   {lastMsg.is_photo
                                     ? "📷 Photo"
                                     : lastMsg.sender.toLowerCase() === currentUser.username.toLowerCase()
@@ -487,7 +507,7 @@ export const Inbox: React.FC<InboxProps> = ({
 
                       {/* ── Timer bar — full width, pinned to row bottom just above divider ── */}
                       {conversationIsLive && (
-                        <div className="h-[3px] w-full bg-zinc-100 dark:bg-zinc-800/60 overflow-hidden">
+                        <div className="h-[6px] w-full bg-zinc-100 dark:bg-zinc-800/60 overflow-hidden">
                           {timerPercent !== null ? (
                             <div
                               className={`h-full transition-none
@@ -530,7 +550,7 @@ export const Inbox: React.FC<InboxProps> = ({
                 <div>
                   <h4 className="font-bold text-sm theme-text-primary">No saved chats yet</h4>
                   <p className="text-xs text-zinc-400 mt-1 max-w-[210px] mx-auto leading-relaxed">
-                    When a conversation explodes, you can save it permanently for 10 ⭐ links.
+                    When a conversation explodes, you can save it permanently for 25 🔗 links.
                   </p>
                 </div>
               </div>
@@ -748,7 +768,7 @@ export const Inbox: React.FC<InboxProps> = ({
           >
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-black theme-text-primary flex items-center gap-1.5">
-                <MessageSquarePlus className="w-5 h-5 text-indigo-500" /> Start Chat
+                <UserPlus className="w-5 h-5 text-indigo-500" /> Add Friends
               </h2>
               <button
                 type="button"

@@ -1,6 +1,6 @@
 import React from "react";
 import { User } from "../types";
-import { ChevronLeft, Award, Flame, Star, Medal, Sparkles } from "lucide-react";
+import { ChevronLeft, Award, Flame, Medal, Sparkles } from "lucide-react";
 
 interface ProfileProps {
   currentUser: User;
@@ -38,63 +38,79 @@ export const Profile: React.FC<ProfileProps> = ({ currentUser, friendsList, onBa
       {/* Profile Main Container */}
       <main className="flex-1 max-w-2xl w-full mx-auto px-6 py-8 space-y-8 pb-12">
         
-        {/* Top Profile Card Header with big customizable Linker character */}
-        <section className="flex flex-col items-center text-center p-8 rounded-3xl theme-card border relative overflow-hidden bg-gradient-to-br from-[#FE2C55]/5 via-[#a855f7]/5 to-transparent shadow-xl">
-          {/* Accent decoration */}
-          <div className="absolute top-0 inset-x-0 h-1.5 bg-gradient-to-r from-[#25F4EE] via-[#a855f7] to-[#FE2C55] shadow-lg shadow-pink-500/20" />
-          
-          {/* Massive Gold / Colorful Halo Aura */}
-          <div className={`w-28 h-28 rounded-[32px] flex items-center justify-center text-5xl mb-5 border-4 border-white dark:border-[#0b0518] shadow-2xl relative select-none animate-bounce
-            ${myColor === 'pink' ? 'bg-[#FE2C55]/15 border-[#FE2C55]/40 shadow-[#FE2C55]/40' : ''}
-            ${myColor === 'cyan' ? 'bg-[#25F4EE]/15 border-[#25F4EE]/40 shadow-[#25F4EE]/40' : ''}
-            ${myColor === 'purple' ? 'bg-[#a855f7]/15 border-[#a855f7]/40 shadow-[#a855f7]/40' : ''}
-            ${myColor === 'gold' ? 'bg-[#eab308]/15 border-[#eab308]/40 shadow-[#eab308]/40' : ''}
-            ${myColor === 'green' ? 'bg-[#22c55e]/15 border-[#22c55e]/40 shadow-[#22c55e]/40' : ''}
-            ${myColor === 'blue' ? 'bg-[#3b82f6]/15 border-[#3b82f6]/40 shadow-[#3b82f6]/40' : ''}
-          `} style={{ animationDuration: "3.5s" }}>
+        {/* Profile Card */}
+        <section className="p-6 rounded-3xl theme-card border flex flex-col sm:flex-row items-center gap-6 relative overflow-hidden bg-gradient-to-tr from-[#FE2C55]/5 via-[#a855f7]/5 to-transparent shadow-xl">
+          <div className="absolute top-0 inset-x-0 h-1.5 bg-gradient-to-r from-[#25F4EE] via-[#a855f7] to-[#FE2C55]" />
+
+          {/* Avatar with aura */}
+          <div className={`w-20 h-20 rounded-3xl flex items-center justify-center text-4xl shadow-2xl relative shrink-0 select-none
+            ${myColor === 'pink' ? 'bg-[#FE2C55]/15 border-2 border-[#FE2C55] shadow-[#FE2C55]/30' : ''}
+            ${myColor === 'cyan' ? 'bg-[#25F4EE]/15 border-2 border-[#25F4EE] shadow-[#25F4EE]/30' : ''}
+            ${myColor === 'purple' ? 'bg-[#a855f7]/15 border-2 border-[#a855f7] shadow-[#a855f7]/30' : ''}
+            ${myColor === 'gold' ? 'bg-[#eab308]/15 border-2 border-[#eab308] shadow-[#eab308]/30' : ''}
+            ${myColor === 'green' ? 'bg-[#22c55e]/15 border-2 border-[#22c55e] shadow-[#22c55e]/30' : ''}
+            ${myColor === 'blue' ? 'bg-[#3b82f6]/15 border-2 border-[#3b82f6] shadow-[#3b82f6]/30' : ''}
+          `}>
             {myAvatar}
-            <span className="absolute -bottom-2 px-3 py-0.5 bg-[#FE2C55] rounded-full text-[9px] font-black text-white uppercase tracking-widest border border-white dark:border-[#0b0518]">
-              ACTIVE
+            <span className="absolute -bottom-1.5 -right-1.5 flex h-4 w-4">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-pink-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-4 w-4 bg-[#FE2C55] border-2 border-white dark:border-[#0b0518]"></span>
             </span>
           </div>
 
-          {/* Under Avatar Customizable Companion Button */}
-          <button
-            onClick={onOpenGenerator}
-            className="mb-5 px-4.5 py-2 bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/25 text-[#a855f7] dark:text-purple-300 font-extrabold text-[10px] tracking-widest rounded-full uppercase transition-all duration-200 shadow-md hover:scale-105 active:scale-95 cursor-pointer flex items-center gap-1.5"
-          >
-            <Sparkles className="w-3.5 h-3.5 text-pink-500 animate-pulse" />
-            Generate Linker Presets 🎲
-          </button>
+          <div className="text-center sm:text-left space-y-1 flex-1">
+            <h2 className="text-3xl font-black theme-text-primary tracking-tight leading-none uppercase">
+              {currentUser.nickname}
+            </h2>
+            <p className="text-base text-zinc-400 font-bold tracking-wide">@{currentUser.username}</p>
 
-          <h2 className="text-3xl font-black theme-text-primary tracking-tight leading-none uppercase">
-            {currentUser.nickname}
-          </h2>
-          <p className="text-base text-zinc-400 font-bold mt-1 mb-6">
-            @{currentUser.username}
-          </p>
-
-          <div className="grid grid-cols-2 gap-4 w-full">
-            <div className="p-4 rounded-2xl bg-zinc-50 dark:bg-zinc-950/40 border theme-border flex flex-col items-center shadow-xs">
-              <span className="text-[10px] text-zinc-400 font-black uppercase tracking-wider mb-1">
-                Total Links score
+            <div className="pt-2 flex flex-wrap justify-center sm:justify-start gap-2">
+              {/* Spendable balance — silver chain */}
+              <span className="px-3 py-1 bg-zinc-700/30 border border-zinc-500/30 text-zinc-200 font-black text-xs rounded-full uppercase tracking-wider flex items-center gap-1.5">
+                🔗 {currentUser.links} links
               </span>
-              <span className="text-3xl font-black text-amber-500 flex items-center gap-1.5 animate-pulse">
-                <Star className="w-7 h-7 fill-amber-500 text-amber-500 animate-spin" style={{ animationDuration: "8s" }} />
-                {currentUser.links}
-              </span>
-            </div>
-            
-            <div className="p-4 rounded-2xl bg-zinc-50 dark:bg-zinc-950/40 border theme-border flex flex-col items-center shadow-xs">
-              <span className="text-[10px] text-zinc-400 font-black uppercase tracking-wider mb-1">
-                Connections
-              </span>
-              <span className="text-3xl font-black text-pink-500">
-                {friendsList.length}
+              {/* All-time total — gold chain */}
+              <span className="px-3 py-1 border font-black text-xs rounded-full uppercase tracking-wider flex items-center gap-1.5"
+                style={{ background: "rgba(251,191,36,0.1)", borderColor: "rgba(251,191,36,0.3)" }}>
+                <span>⛓️</span>
+                <span style={{ background: "linear-gradient(90deg,#fbbf24,#f59e0b,#fcd34d)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
+                  {currentUser.all_time_links ?? 0} all-time
+                </span>
               </span>
             </div>
           </div>
         </section>
+
+        {/* Generate Linker Presets button */}
+        <div className="flex justify-center">
+          <button
+            onClick={onOpenGenerator}
+            className="px-5 py-2 bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/25 text-[#a855f7] dark:text-purple-300 font-extrabold text-[10px] tracking-widest rounded-full uppercase transition-all duration-200 shadow-md hover:scale-105 active:scale-95 cursor-pointer flex items-center gap-1.5"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-pink-500 animate-pulse" />
+            Generate Linker Presets 🎲
+          </button>
+        </div>
+
+        {/* Stats grid */}
+        <div className="grid grid-cols-2 gap-4">
+          <div className="p-4 rounded-2xl bg-zinc-50 dark:bg-zinc-950/40 border theme-border flex flex-col items-center shadow-xs">
+            <span className="text-[10px] text-zinc-400 font-black uppercase tracking-wider mb-1">
+              Connections
+            </span>
+            <span className="text-3xl font-black text-pink-500">
+              {friendsList.length}
+            </span>
+          </div>
+          <div className="p-4 rounded-2xl bg-zinc-50 dark:bg-zinc-950/40 border theme-border flex flex-col items-center shadow-xs">
+            <span className="text-[10px] text-zinc-400 font-black uppercase tracking-wider mb-1">
+              All-time links
+            </span>
+            <span className="text-3xl font-black text-amber-500">
+              ⛓️ {currentUser.all_time_links ?? 0}
+            </span>
+          </div>
+        </div>
 
         {/* Streaks and Badges */}
         <section className="space-y-4">

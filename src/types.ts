@@ -4,6 +4,7 @@ export interface User {
   nickname: string;
   created_at: string;
   links: number;
+  all_time_links?: number;     // permanent total, never decrements
   push_subscription?: string | null;
   linker_avatar?: string;
   linker_color?: string;
@@ -83,6 +84,7 @@ export interface Message {
   seen?: boolean;  // true if receiver has viewed the message
   message_type?: "opener" | "normal";  // distinguishes message phase
   is_responded_to?: number;  // tracks if opener has been answered
+  linkEarnedAnimation?: boolean;  // client-side flag for +1 🔗 bubble animation
 }
 
 export interface TimerState {

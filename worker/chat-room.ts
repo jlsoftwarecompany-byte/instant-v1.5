@@ -864,8 +864,8 @@ export class ChatRoom {
 
           await db.batch([
             db.prepare("UPDATE conversations SET conversation_started = 1 WHERE id = ?").bind(convId),
-            db.prepare("UPDATE users SET links = links + 1 WHERE LOWER(username) = ?").bind(p1),
-            db.prepare("UPDATE users SET links = links + 1 WHERE LOWER(username) = ?").bind(p2),
+            db.prepare("UPDATE users SET links = links + 1, all_time_links = all_time_links + 1 WHERE LOWER(username) = ?").bind(p1),
+            db.prepare("UPDATE users SET links = links + 1, all_time_links = all_time_links + 1 WHERE LOWER(username) = ?").bind(p2),
           ]);
 
           const [u1, u2] = await Promise.all([
@@ -1010,19 +1010,30 @@ export class ChatRoom {
           .first<{ message_count: number }>();
         const currentMessageCount = convAfter?.message_count ?? 0;
 
-        // Award links only on a successful opener response AND only while the
-        // combined message count is ≤ 10. From the 11th message on, nobody earns.
+        // 1. Opener response bonus (both users, based on timer choice)
         if (isOpenerResponse && currentMessageCount <= 10) {
           earnedLinks = openerReward(conv.opener_timer_choice ?? 0);
           await db.batch([
-            db.prepare("UPDATE users SET links = links + ? WHERE LOWER(username) = ?").bind(earnedLinks, authedUser),
-            db.prepare("UPDATE users SET links = links + ? WHERE LOWER(username) = ?").bind(earnedLinks, target),
+            db.prepare("UPDATE users SET links = links + ?, all_time_links = all_time_links + ? WHERE LOWER(username) = ?")
+              .bind(earnedLinks, earnedLinks, authedUser),
+            db.prepare("UPDATE users SET links = links + ?, all_time_links = all_time_links + ? WHERE LOWER(username) = ?")
+              .bind(earnedLinks, earnedLinks, target),
           ]);
         }
 
+        // 2. Per-message sender link (1 link to sender only, up to message 10)
+        let perMsgLinkId: number | null = null;
+        if (currentMessageCount <= 10) {
+          await db
+            .prepare("UPDATE users SET links = links + 1, all_time_links = all_time_links + 1 WHERE LOWER(username) = ?")
+            .bind(authedUser)
+            .run();
+          perMsgLinkId = (savedMsg.id as number) ?? null;
+        }
+
         const [senderUser, targetUser] = await Promise.all([
-          db.prepare("SELECT links FROM users WHERE LOWER(username) = ?").bind(authedUser).first<any>(),
-          db.prepare("SELECT links FROM users WHERE LOWER(username) = ?").bind(target).first<any>(),
+          db.prepare("SELECT links, all_time_links FROM users WHERE LOWER(username) = ?").bind(authedUser).first<any>(),
+          db.prepare("SELECT links, all_time_links FROM users WHERE LOWER(username) = ?").bind(target).first<any>(),
         ]);
 
         const broadcast = JSON.stringify({
@@ -1037,12 +1048,15 @@ export class ChatRoom {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(broadcast);
           if (earnedLinks > 0)
-            ws.send(JSON.stringify({ type: "LINKS_EARNED", amount: earnedLinks, reason: "Successful opener response", links: senderUser?.links || 0 }));
+            ws.send(JSON.stringify({ type: "LINKS_EARNED", amount: earnedLinks, reason: "Successful opener response", links: senderUser?.links || 0, all_time_links: senderUser?.all_time_links || 0 }));
+          // Per-message award notification (triggers +1 🔗 bubble animation)
+          if (perMsgLinkId !== null)
+            ws.send(JSON.stringify({ type: "LINKS_EARNED", amount: 1, reason: "message_sent", messageId: perMsgLinkId, links: senderUser?.links || 0, all_time_links: senderUser?.all_time_links || 0 }));
         }
         if (targetWs?.readyState === WebSocket.OPEN) {
           targetWs.send(broadcast);
           if (earnedLinks > 0)
-            targetWs.send(JSON.stringify({ type: "LINKS_EARNED", amount: earnedLinks, reason: "Successful opener response", links: targetUser?.links || 0 }));
+            targetWs.send(JSON.stringify({ type: "LINKS_EARNED", amount: earnedLinks, reason: "Successful opener response", links: targetUser?.links || 0, all_time_links: targetUser?.all_time_links || 0 }));
         } else {
           const senderInfo = await db
             .prepare("SELECT nickname FROM users WHERE LOWER(username) = ?")
@@ -1182,7 +1196,7 @@ export class ChatRoom {
           return;
         }
 
-        const SAVE_COST = 10;
+        const SAVE_COST = 25;
         const userRow = await db
           .prepare("SELECT links FROM users WHERE LOWER(username) = ?")
           .bind(authedUser)
@@ -1294,7 +1308,7 @@ export class ChatRoom {
       const placeholders = Array.from(contactNames).map(() => "?").join(",");
       const { results: list } = await db
         .prepare(
-          `SELECT username, nickname, links, linker_avatar, linker_color FROM users WHERE LOWER(username) IN (${placeholders})`
+          `SELECT username, nickname, links, all_time_links, linker_avatar, linker_color FROM users WHERE LOWER(username) IN (${placeholders})`
         )
         .bind(...Array.from(contactNames))
         .all<any>();
@@ -1302,11 +1316,18 @@ export class ChatRoom {
         usersMap[u.username.toLowerCase()] = {
           nickname: u.nickname,
           links: u.links,
+          all_time_links: u.all_time_links ?? 0,
           linker_avatar: u.linker_avatar || "👾",
           linker_color: u.linker_color || "pink",
         };
       });
     }
+
+    // Fetch the current user's own row (for currentUser state on client)
+    const selfRow = await db
+      .prepare("SELECT links, all_time_links FROM users WHERE LOWER(username) = ?")
+      .bind(uLower)
+      .first<any>();
 
     const { results: allUsers } = await db
       .prepare(
@@ -1425,6 +1446,10 @@ export class ChatRoom {
       sock.send(
         JSON.stringify({
           type: "FRIEND_UPDATE",
+          user: selfRow ? {
+            links: selfRow.links,
+            all_time_links: selfRow.all_time_links ?? 0,
+          } : undefined,
           friendships,
           users: usersMap,
           conversations,

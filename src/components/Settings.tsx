@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { useTheme } from "./ThemeContext";
 import { wsService } from "../lib/ws";
 import { User, IgnoredUser } from "../types";
-import { Sun, Moon, Check, UserCheck, ChevronLeft, Save, Star, EyeOff } from "lucide-react";
+import { Sun, Moon, Check, UserCheck, ChevronLeft, Save, EyeOff } from "lucide-react";
 import { motion } from "motion/react";
 
 interface SettingsProps {
@@ -119,7 +119,7 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onBack, onUserU
           Inbox
         </button>
         <h1 className="text-lg font-black tracking-widest theme-text-primary uppercase tiktok-gradient-text">
-          Customize Center
+          Settings
         </h1>
         <div className="w-16" /> {/* Spacer */}
       </header>
@@ -127,58 +127,20 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onBack, onUserU
       {/* Main Container */}
       <main className="flex-1 max-w-2xl w-full mx-auto px-6 py-8 space-y-8 pb-20">
         
-        {/* Profile Card Summary */}
-        <section className="p-6 rounded-3xl theme-card border flex flex-col sm:flex-row items-center gap-6 relative overflow-hidden bg-gradient-to-tr from-[#FE2C55]/5 via-[#a855f7]/5 to-transparent shadow-xl">
-          {/* Animated Glow Halo */}
-          <div className={`w-20 h-20 rounded-3xl flex items-center justify-center text-4xl shadow-2xl relative shrink-0 transition-all duration-300 transform hover:scale-105 select-none
-            ${selectedAura === 'pink' ? 'bg-[#FE2C55]/15 border-2 border-[#FE2C55] shadow-[#FE2C55]/30' : ''}
-            ${selectedAura === 'cyan' ? 'bg-[#25F4EE]/15 border-2 border-[#25F4EE] shadow-[#25F4EE]/30' : ''}
-            ${selectedAura === 'purple' ? 'bg-[#a855f7]/15 border-2 border-[#a855f7] shadow-[#a855f7]/30' : ''}
-            ${selectedAura === 'gold' ? 'bg-[#eab308]/15 border-2 border-[#eab308] shadow-[#eab308]/30' : ''}
-            ${selectedAura === 'green' ? 'bg-[#22c55e]/15 border-2 border-[#22c55e] shadow-[#22c55e]/30' : ''}
-            ${selectedAura === 'blue' ? 'bg-[#3b82f6]/15 border-2 border-[#3b82f6] shadow-[#3b82f6]/30' : ''}
-          `}>
-            {selectedMascot}
-            {/* Tiny live status aura badge */}
-            <span className="absolute -bottom-1.5 -right-1.5 flex h-4 w-4">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-pink-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-4 w-4 bg-[#FE2C55] border-2 border-white dark:border-[#0b0518]"></span>
-            </span>
-          </div>
-          
-          <div className="text-center sm:text-left space-y-1 flex-1">
-            <h2 className="text-3xl font-black theme-text-primary tracking-tight leading-none uppercase">
-              {currentUser.nickname}
-            </h2>
-            <p className="text-base text-zinc-400 font-bold tracking-wide">
-              @{currentUser.username}
-            </p>
-            <div className="pt-2 flex flex-wrap justify-center sm:justify-start gap-1.5">
-              <span className="px-3.5 py-1 bg-gradient-to-r from-yellow-500 to-amber-500 text-zinc-950 font-black text-xs rounded-full uppercase tracking-widest flex items-center justify-center gap-1.5 shadow-lg shadow-yellow-500/10">
-                <Star className="w-3.5 h-3.5 fill-current text-zinc-950 animate-bounce" style={{ animationDuration: "1.8s" }} /> 
-                {currentUser.links} LINKS
-              </span>
-              <span className="px-3 py-1 bg-purple-500/15 border border-purple-500/20 text-purple-400 font-black text-[10px] rounded-full uppercase tracking-wider">
-                👾 {LINKER_MASCOTS.find(m => m.char === selectedMascot)?.name || "Linker"}
-              </span>
-            </div>
-          </div>
-        </section>
-
-        {/* Customize Your Linker Section */}
+        {/* Linker Identity — Avatar & Color */}
         <section className="space-y-4">
-          <div className="space-y-1">
-            <h3 className="text-xs font-black tracking-widest text-[#FE2C55] uppercase flex items-center gap-2">
-              <span className="p-1 rounded bg-[#FE2C55]/10 shrink-0 select-none animate-pulse">👾</span> Linkers Companion Avatar
-            </h3>
-            <p className="text-xs text-zinc-400 font-medium">Your customized Character Companion appears on Chat lists, profiles, and score tables!</p>
-          </div>
+          <h3 className="text-xs font-black tracking-widest text-[#FE2C55] uppercase flex items-center gap-2">
+            <span>👾</span> Linker Identity
+          </h3>
+          <p className="text-xs text-zinc-400 font-medium">
+            Choose your avatar emoji and aura color. These appear on your profile and in conversations.
+          </p>
 
           <div className="p-6 rounded-3xl theme-card border space-y-6">
             {/* Mascot grids */}
             <div className="space-y-3">
               <span className="block text-[10px] font-black uppercase text-zinc-400 tracking-wider">
-                1. Choose Your Companion Character
+                Avatar
               </span>
               <div className="grid grid-cols-5 gap-3">
                 {LINKER_MASCOTS.map(m => (
@@ -205,7 +167,7 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onBack, onUserU
             {/* Aura grids */}
             <div className="space-y-3 pt-4 border-t border-purple-500/5">
               <span className="block text-[10px] font-black uppercase text-zinc-400 tracking-wider">
-                2. Choose neon Aura outline
+                Aura Color
               </span>
               <div className="grid grid-cols-3 gap-2">
                 {LINKER_AURAS.map(a => (

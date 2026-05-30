@@ -75,6 +75,12 @@ input, button, select, textarea {
   text-shadow: 0 0 10px rgba(254, 44, 85, 0.61);
 }
 
+/* Gold shimmer animation for all-time links display */
+@keyframes shimmer {
+  0%   { background-position: 0% center; }
+  100% { background-position: 200% center; }
+}
+
 .neon-ring-purple {
   box-shadow: 0 0 12px rgba(168, 85, 247, 0.25);
   border-color: #a855f7 !important;

@@ -131,6 +131,9 @@ function MainApp() {
   // Link burst animation trigger overlays
   const [rewardBurst, setRewardBurst] = useState<{ amount: number; reason: string } | null>(null);
 
+  // Per-message link earned animation (Chat.tsx shows +1 🔗 next to bubble)
+  const [linkEarnedForMessage, setLinkEarnedForMessage] = useState<number | null>(null);
+
   // In-app notification queue (Snapchat-style)
   const [snapNotifications, setSnapNotifications] = useState<SnapNotificationItem[]>([]);
 
@@ -237,6 +240,14 @@ function MainApp() {
           break;
 
         case "FRIEND_UPDATE":
+          // Keep currentUser's spendable + all-time links in sync
+          if (data.user) {
+            setCurrentUser(prev => prev ? {
+              ...prev,
+              links: data.user.links ?? prev.links,
+              all_time_links: data.user.all_time_links ?? prev.all_time_links ?? 0,
+            } : null);
+          }
           setFriendships(data.friendships || []);
           setUsersMap(data.users || {});
           setConversations(data.conversations || []);
@@ -273,29 +284,41 @@ function MainApp() {
         }
 
         case "LINKS_EARNED":
-          // Update user's link count
+          // Update user's spendable + all-time link counts
           if (currentUser) {
-            setCurrentUser(prev => prev ? { ...prev, links: data.links } : null);
+            setCurrentUser(prev => prev ? {
+              ...prev,
+              links: data.links,
+              all_time_links: data.all_time_links ?? prev.all_time_links ?? 0,
+            } : null);
 
             // Refresh info in storage
             const stored = localStorage.getItem("instant-user");
             if (stored) {
-              const parsed = JSON.parse(stored);
-              parsed.links = data.links;
-              localStorage.setItem("instant-user", JSON.stringify(parsed));
+              try {
+                const parsed = JSON.parse(stored);
+                parsed.links = data.links;
+                if (data.all_time_links !== undefined) parsed.all_time_links = data.all_time_links;
+                localStorage.setItem("instant-user", JSON.stringify(parsed));
+              } catch (e) {}
             }
           }
 
-          // Show Snapchat-style notification
-          addSnapNotification({
-            type: "links_earned",
-            title: `+${data.amount} ⭐ LINKS!`,
-            subtitle: data.reason || "You earned new links",
-            icon: <Gift className="w-5 h-5" />,
-            accentColor: "border-amber-500/30 bg-amber-500/5",
-            textColor: "text-amber-600 dark:text-amber-400",
-            duration: 5000
-          });
+          // Per-message award: forward to Chat for +1 🔗 bubble animation
+          if (data.reason === "message_sent" && data.messageId) {
+            setLinkEarnedForMessage(data.messageId);
+          } else {
+            // Show Snapchat-style notification for other reward types
+            addSnapNotification({
+              type: "links_earned",
+              title: `+${data.amount} ⭐ LINKS!`,
+              subtitle: data.reason || "You earned new links",
+              icon: <Gift className="w-5 h-5" />,
+              accentColor: "border-amber-500/30 bg-amber-500/5",
+              textColor: "text-amber-600 dark:text-amber-400",
+              duration: 5000
+            });
+          }
           break;
 
         case "SAVE_SUCCESS":
@@ -518,6 +541,8 @@ function MainApp() {
           }}
           onLinksRewardTriggered={handleTriggerLinksRewardOverlay}
           addSnapNotification={addSnapNotification}
+          linkEarnedForMessage={linkEarnedForMessage}
+          onLinkEarnedAnimationDone={() => setLinkEarnedForMessage(null)}
         />
       )}
 
