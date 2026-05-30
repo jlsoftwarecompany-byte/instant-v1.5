@@ -288,12 +288,11 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onBack, onUserU
             
             <button
               onClick={toggleTheme}
-              className="relative inline-flex h-8 w-[72px] items-center rounded-full bg-zinc-200 dark:bg-zinc-950 border border-zinc-300 dark:border-purple-950 transition-colors focus:outline-none cursor-pointer overflow-hidden"
+              className="relative h-8 w-16 rounded-full bg-zinc-200 dark:bg-zinc-950 border border-zinc-300 dark:border-purple-950 transition-colors focus:outline-none cursor-pointer"
             >
               <div
-                className={`
-                  inline-flex items-center justify-center h-6 w-6 rounded-full bg-white dark:bg-zinc-900 transition-transform shadow-md shrink-0
-                  ${theme === "black" ? "translate-x-[42px]" : "translate-x-1"}
+                className={`absolute top-1 inline-flex items-center justify-center h-6 w-6 rounded-full bg-white dark:bg-zinc-900 transition-all duration-200 shadow-md
+                  ${theme === "black" ? "right-1" : "left-1"}
                 `}
               >
                 {theme === "black" ? (
